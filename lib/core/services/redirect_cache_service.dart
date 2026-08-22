@@ -167,7 +167,8 @@ class RedirectCacheService {
         }
       }
       
-      await response.drain();
+      // await response.drain();
+      unawaited(response.drain()); // 不等待，后台忽略
       client.close();
       
       final totalTime = DateTime.now().difference(startTime).inMilliseconds;

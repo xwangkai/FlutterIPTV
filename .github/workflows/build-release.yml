@@ -125,6 +125,27 @@ jobs:
       - name: Setup Android Signing
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release-key.jks
+
+          # 验证解码是否正确（应该输出密钥信息，不报错）
+          keytool -list \
+            -keystore android/app/release-key-orig.jks \
+            -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+            -v 2>&1 | head -20
+
+          # 用 JDK 17 的 keytool 转换为旧版 JKS 格式（兼容 Android 构建工具）
+          keytool -importkeystore \
+            -srckeystore android/app/release-key-orig.jks \
+            -destkeystore android/app/release-key.jks \
+            -deststoretype JKS \
+            -srcstorepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+            -deststorepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+            -srcalias "${{ secrets.KEY_ALIAS }}" \
+            -destalias "${{ secrets.KEY_ALIAS }}" \
+            -noprompt 2>&1 | grep -v "^Warning"
+          
+          # 清理临时文件
+          rm -f android/app/release-key-orig.jks
+          
           cat > android/key.properties << EOF
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword=${{ secrets.KEY_PASSWORD }}

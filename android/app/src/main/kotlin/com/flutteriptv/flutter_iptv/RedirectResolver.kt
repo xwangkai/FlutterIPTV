@@ -235,7 +235,8 @@ object RedirectResolver {
                 ".mpd",    // MPEG-DASH
                 ".f4m",    // Flash Manifest
                 ".ism",    // Smooth Streaming
-                ".webm"    // WebM
+                ".webm",    // WebM
+                ".smil"
             )
             
             // 检查路径是否以这些扩展名结尾

@@ -1018,6 +1018,88 @@ class _PlayerScreenState extends State<PlayerScreen>
     _resetGestureState();
   }
 
+
+  /// Catchup 专用 seek：通过重新生成带偏移起始时间的 URL 实现跳转
+  void _seekCatchupTo(Duration offset) {
+    final program = _currentCatchupProgram;
+    final channel = _originalChannel;
+    if (program == null || channel == null) return;
+  
+    final newStart = program.start.add(offset);
+    if (!newStart.isBefore(program.end)) return;
+  
+    final adjustedProgram = EpgProgram(
+      channelId: program.channelId,
+      title: program.title,
+      description: program.description,
+      start: newStart,
+      end: program.end,
+      category: program.category,
+    );
+  
+    final newUrl = _generateCatchupUrl(channel, adjustedProgram);
+    if (newUrl == null) return;
+  
+    final playbackChannel = channel.copyWith(
+      url: newUrl,
+      sources: [newUrl],
+      groupName: '${channel.groupName} [Catchup]',
+      catchup: 'active',
+    );
+  
+    _currentCatchupProgram = adjustedProgram;
+    _playerProvider?.setOverrideDuration(program.end.difference(newStart));
+    _playerProvider?.playChannel(playbackChannel);
+  }
+  
+  /// 节目播完后自动播放下一个（或回到直播）
+  void _onPlaybackCompleted() {
+    if (!mounted) return;
+    if (_currentCatchupProgram == null || _originalChannel == null) return;
+  
+    final currentEnd = _currentCatchupProgram!.end;
+    final channel = _originalChannel!;
+  
+    // 先找当天的节目列表
+    List<EpgProgram> programs = EpgService().getProgramsForDate(
+      channel.epgId, channel.name, currentEnd,
+    );
+  
+    // 节目结束时间在深夜时，下一个节目可能在次日
+    EpgProgram? next = _findNextProgram(programs, currentEnd);
+    if (next == null) {
+      final nextDayPrograms = EpgService().getProgramsForDate(
+        channel.epgId,
+        channel.name,
+        currentEnd.add(const Duration(days: 1)),
+      );
+      next = _findNextProgram(nextDayPrograms, currentEnd);
+    }
+  
+    if (next == null) {
+      _backToLive();
+      return;
+    }
+  
+    final now = DateTime.now();
+    if (next.end.isAfter(now)) {
+      // 下一个节目还没结束（正在直播）→ 回到直播
+      _backToLive();
+    } else {
+      // 下一个节目在回看窗口内 → 自动播放
+      _playCatchup(next);
+    }
+  }
+  
+  /// 从列表里找紧接在 afterTime 之后开始的第一个节目
+  EpgProgram? _findNextProgram(List<EpgProgram> programs, DateTime afterTime) {
+    final candidates = programs
+        .where((p) => !p.start.isBefore(afterTime))
+        .toList()
+      ..sort((a, b) => a.start.compareTo(b.start));
+    return candidates.isEmpty ? null : candidates.first;
+  }
+
   // EPG Playback Logic
   void _playCatchup(EpgProgram program) {
     final currentChannel = _playerProvider?.currentChannel;
@@ -2698,6 +2780,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  double? _draggingValue; // 拖动中的临时值，null 表示没在拖
+
   Widget _buildBottomControls() {
     return Consumer<PlayerProvider>(
       builder: (context, provider, _) {
@@ -2843,15 +2927,39 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 .withOpacity(0.3),
                           ),
                           child: Slider(
-                            value: provider.position.inSeconds.toDouble().clamp(
+                            value: (_draggingValue ?? provider.position.inSeconds.toDouble()).clamp(
                                 0, provider.duration.inSeconds.toDouble()),
                             max: provider.duration.inSeconds
                                 .toDouble()
                                 .clamp(1, double.infinity),
+                            onChangeStart: (value) {
+                              setState(() => _draggingValue = value);
+                            },
                             onChanged: (value) {
-                              provider.seek(Duration(seconds: value.toInt()));
+                              // 拖动时只更新进度条视觉位置，不触发 seek
+                              setState(() => _draggingValue = value);
+                            },
+                            onChangeEnd: (value) {
+                              setState(() => _draggingValue = null);
+                              if (_currentCatchupProgram != null) {
+                                // catchup 模式：重新生成 URL 跳转
+                                _seekCatchupTo(Duration(seconds: value.toInt()));
+                              } else {
+                                // 普通 VOD：原生 seek
+                                provider.seek(Duration(seconds: value.toInt()));
+                              }
                             },
                           ),
+                          //child: Slider(
+                          //  value: provider.position.inSeconds.toDouble().clamp(
+                          //      0, provider.duration.inSeconds.toDouble()),
+                          //  max: provider.duration.inSeconds
+                          //      .toDouble()
+                          //      .clamp(1, double.infinity),
+                          //  onChanged: (value) {
+                          //    provider.seek(Duration(seconds: value.toInt()));
+                          //  },
+                          //),
                         ),
                         // 时堕棿显示锛堟洿宽忕殑瀛椾綋鍜岄棿璺濓級
                         Padding(

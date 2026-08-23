@@ -75,9 +75,16 @@ class PlayerProvider extends ChangeNotifier {
   PlayerState get state => _state;
   String? get error => _error;
   Duration get position => _position;
-  Duration get duration {
+  //Duration get duration {
     // Return override duration if set and player reports zero/small duration
-    if (_overrideDuration != null && _duration.inSeconds < 10) {
+  //  if (_overrideDuration != null && _duration.inSeconds < 10) {
+  //    return _overrideDuration!;
+  //  }
+  //  return _duration;
+  //}
+
+  Duration get duration {
+    if (_overrideDuration != null) {
       return _overrideDuration!;
     }
     return _duration;

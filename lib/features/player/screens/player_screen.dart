@@ -1487,7 +1487,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   Timer? _longPressTimer; // 长按定时器
 
   Timer? _rightLongPressTimer;
-  bool _rightLongPressTriggered = false;
+  DateTime? _rightKeyDownTime;
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     _showControlsTemporarily();
@@ -1649,23 +1649,31 @@ class _PlayerScreenState extends State<PlayerScreen>
         return KeyEventResult.handled;
       }
 
-      if (event is KeyDownEvent && event is! KeyRepeatEvent) {
-        _rightLongPressTriggered = false;
+      if (event is KeyDownEvent) {
+        if (event is KeyRepeatEvent) return KeyEventResult.handled;
+        _rightKeyDownTime = DateTime.now();
+        _rightLongPressTimer?.cancel();
         _rightLongPressTimer = Timer(const Duration(milliseconds: 500), () {
-          _rightLongPressTriggered = true;
-          if (mounted) setState(() => _showEpgPanel = true);
+          if (mounted && _rightKeyDownTime != null) {
+            setState(() => _showEpgPanel = true);
+            _rightKeyDownTime = null; // 标记为已处理长按
+          }
         });
-      } else if (event is KeyUpEvent) {
+        return KeyEventResult.handled;
+      }
+      if (event is KeyUpEvent) {
         _rightLongPressTimer?.cancel();
         _rightLongPressTimer = null;
-        if (!_rightLongPressTriggered) {
-          // 短按：切换下一个源（原逻辑）
+        if (_rightKeyDownTime != null) {
+          // 短按（定时器还没触发就松手了）
+          _rightKeyDownTime = null;
           final channel = playerProvider.currentChannel;
           if (channel != null && channel.hasMultipleSources) {
             playerProvider.switchToNextSource();
             _showSourceSwitchIndicator(playerProvider);
           }
         }
+        return KeyEventResult.handled;
       }
       return KeyEventResult.handled;
     }
@@ -1753,9 +1761,17 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     // Settings / Menu
+    //if (key == LogicalKeyboardKey.settings ||
+    //    key == LogicalKeyboardKey.contextMenu) {
+    //  _showSettingsSheet(context);
+    //  return KeyEventResult.handled;
+    //}
     if (key == LogicalKeyboardKey.settings ||
         key == LogicalKeyboardKey.contextMenu) {
-      _showSettingsSheet(context);
+      if (event is! KeyDownEvent || event is KeyRepeatEvent) {
+        return KeyEventResult.handled;
+      }
+      setState(() => _showEpgPanel = !_showEpgPanel);
       return KeyEventResult.handled;
     }
 

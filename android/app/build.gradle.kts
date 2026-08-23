@@ -88,9 +88,9 @@ dependencies {
 
 // 加这个：强制所有子模块用同一个 media3 版本
 configurations.all {
-    resolutionStrategy.eachDependency { DependencyResolveDetails details ->
-        if (details.requested.group == 'androidx.media3') {
-            details.useVersion '1.2.1'
+    resolutionStrategy.eachDependency {
+        if (requested.group == "androidx.media3") {
+            useVersion("1.2.1")
         }
     }
 }

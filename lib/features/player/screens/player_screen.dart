@@ -657,6 +657,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _categoryScrollController.dispose();
     _channelScrollController.dispose();
 
+    //add
+    _rightLongPressTimer?.cancel();
+
     // 如果是 Windows mini 模式，退出 mini 模式
     if (WindowsPipChannel.isInPipMode) {
       WindowsPipChannel.exitPipMode();
@@ -1483,6 +1486,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   DateTime? _lastLeftKeyDownTime; // 用于检测长按左键
   Timer? _longPressTimer; // 长按定时器
 
+  Timer? _rightLongPressTimer;
+  bool _rightLongPressTriggered = false;
+
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     _showControlsTemporarily();
 
@@ -1643,19 +1649,22 @@ class _PlayerScreenState extends State<PlayerScreen>
         return KeyEventResult.handled;
       }
 
-      //add
-      // 长按（持续按住）：打开 EPG 面板
-      if (event is KeyRepeatEvent) {
-        setState(() => _showEpgPanel = true);
-        return KeyEventResult.handled;
-      }
-
       if (event is KeyDownEvent && event is! KeyRepeatEvent) {
-        // 切换到下一个源
-        final channel = playerProvider.currentChannel;
-        if (channel != null && channel.hasMultipleSources) {
-          playerProvider.switchToNextSource();
-          _showSourceSwitchIndicator(playerProvider);
+        _rightLongPressTriggered = false;
+        _rightLongPressTimer = Timer(const Duration(milliseconds: 500), () {
+          _rightLongPressTriggered = true;
+          if (mounted) setState(() => _showEpgPanel = true);
+        });
+      } else if (event is KeyUpEvent) {
+        _rightLongPressTimer?.cancel();
+        _rightLongPressTimer = null;
+        if (!_rightLongPressTriggered) {
+          // 短按：切换下一个源（原逻辑）
+          final channel = playerProvider.currentChannel;
+          if (channel != null && channel.hasMultipleSources) {
+            playerProvider.switchToNextSource();
+            _showSourceSwitchIndicator(playerProvider);
+          }
         }
       }
       return KeyEventResult.handled;

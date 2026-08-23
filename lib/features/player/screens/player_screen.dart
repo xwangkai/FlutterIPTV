@@ -1771,6 +1771,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (event is! KeyDownEvent || event is KeyRepeatEvent) {
         return KeyEventResult.handled;
       }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('EPG panel: $_showEpgPanel → ${!_showEpgPanel}')),
+      );
       setState(() => _showEpgPanel = !_showEpgPanel);
       return KeyEventResult.handled;
     }

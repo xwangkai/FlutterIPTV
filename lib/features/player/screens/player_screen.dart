@@ -238,8 +238,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       final provider = _playerProvider!;
       final total = provider.duration;
       final pos = provider.position;
+
+      final effectivePos = _catchupSeekOffset + pos;  // ← 加上 seek 偏移
       if (total.inSeconds > 0 &&
-          pos >= total - const Duration(seconds: 2)) {
+          effectivePos >= total - const Duration(seconds: 2)) {
         _catchupCompletionHandled = true;
         _onPlaybackCompleted();
       }
@@ -605,6 +607,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  String _formatWallClock(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    final s = dt.second.toString().padLeft(2, '0');
+    return '$h:$m:$s';
+  }
+  
   String _formatDuration(Duration duration) {
     final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60);
@@ -3018,12 +3027,24 @@ class _PlayerScreenState extends State<PlayerScreen>
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(
-                                _formatDuration(provider.position),
+                                //_formatDuration(provider.position),
+                                _catchupOriginalStart != null
+                                    ? _formatWallClock(
+                                        _catchupOriginalStart!.add(
+                                          _draggingValue != null
+                                              ? Duration(seconds: _draggingValue!.toInt())  // 拖动中：显示拖动目标时刻
+                                              : _catchupSeekOffset + provider.position,     // 正常播放：显示实际时刻
+                                        ),
+                                      )
+                                    : _formatDuration(provider.position),  // 非回放模式：原来的逻辑
                                 style: const TextStyle(
                                     color: Color(0x99FFFFFF), fontSize: 10),
                               ),
                               Text(
-                                _formatDuration(provider.duration),
+                                //_formatDuration(provider.duration),
+                                _catchupOriginalEnd != null
+                                    ? _formatWallClock(_catchupOriginalEnd!)  // 节目结束时刻
+                                    : _formatDuration(provider.duration),     // 非回放模式：原来的逻辑
                                 style: const TextStyle(
                                     color: Color(0x99FFFFFF), fontSize: 10),
                               ),

@@ -1036,12 +1036,16 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Catchup 专用 seek：通过重新生成带偏移起始时间的 URL 实现跳转
   void _seekCatchupTo(Duration offset) {
-    // offset 是相对节目原始开始时间的偏移
-    final originalStart = _catchupOriginalStart;
-    final originalEnd = _catchupOriginalEnd;
-    final seekChannel = _originalChannel;
+    // 先统一判空，再用 ! 断言非空
+    if (_catchupOriginalStart == null || _catchupOriginalEnd == null ||
+        _originalChannel == null || _currentCatchupProgram == null) return;
     
-    final program = _currentCatchupProgram;
+    // offset 是相对节目原始开始时间的偏移
+    final originalStart = _catchupOriginalStart!;
+    final originalEnd = _catchupOriginalEnd!;
+    final seekChannel = _originalChannel!;
+    
+    final program = _currentCatchupProgram!;
     final channel = _originalChannel;
     if (originalStart == null || originalEnd == null || program == null || channel == null) return;
   
@@ -1191,8 +1195,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
 
     // setOverrideDuration 传完整节目时长（原来就是这样，确认一下）
-    final duration = program.end.difference(program.start);
-    _playerProvider?.setOverrideDuration(duration);
+    //final duration = program.end.difference(program.start);
+    //_playerProvider?.setOverrideDuration(duration);
   }
 
   void _backToLive() {

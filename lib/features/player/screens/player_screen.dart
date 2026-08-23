@@ -1643,6 +1643,13 @@ class _PlayerScreenState extends State<PlayerScreen>
         return KeyEventResult.handled;
       }
 
+      //add
+      // 长按（持续按住）：打开 EPG 面板
+      if (event is KeyRepeatEvent) {
+        setState(() => _showEpgPanel = true);
+        return KeyEventResult.handled;
+      }
+
       if (event is KeyDownEvent && event is! KeyRepeatEvent) {
         // 切换到下一个源
         final channel = playerProvider.currentChannel;

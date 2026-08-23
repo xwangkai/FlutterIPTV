@@ -1039,7 +1039,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     // offset 是相对节目原始开始时间的偏移
     final originalStart = _catchupOriginalStart;
     final originalEnd = _catchupOriginalEnd;
-    final channel = _originalChannel;
+    final seekChannel = _originalChannel;
     
     final program = _currentCatchupProgram;
     final channel = _originalChannel;
@@ -1059,13 +1059,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       category: program.category,
     );
   
-    final newUrl = _generateCatchupUrl(channel, adjustedProgram);
+    final newUrl = _generateCatchupUrl(seekChannel, adjustedProgram);
     if (newUrl == null) return;
   
-    final playbackChannel = channel.copyWith(
+    final playbackChannel = seekChannel.copyWith(
       url: newUrl,
       sources: [newUrl],
-      groupName: '${channel.groupName} [Catchup]',
+      groupName: '${seekChannel.groupName} [Catchup]',
       catchup: 'active',
     );
   
@@ -1088,19 +1088,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_currentCatchupProgram == null || _originalChannel == null) return;
   
     final currentEnd = _currentCatchupProgram!.end;
-    final channel = _originalChannel!;
+    final epgChannel = _originalChannel!;
   
     // 先找当天的节目列表
     List<EpgProgram> programs = EpgService().getProgramsForDate(
-      channel.epgId, channel.name, currentEnd,
+      epgChannel.epgId, epgChannel.name, currentEnd,
     );
   
     // 节目结束时间在深夜时，下一个节目可能在次日
     EpgProgram? next = _findNextProgram(programs, currentEnd);
     if (next == null) {
       final nextDayPrograms = EpgService().getProgramsForDate(
-        channel.epgId,
-        channel.name,
+        epgChannel.epgId,
+        epgChannel.name,
         currentEnd.add(const Duration(days: 1)),
       );
       next = _findNextProgram(nextDayPrograms, currentEnd);

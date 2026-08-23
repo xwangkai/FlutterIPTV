@@ -229,6 +229,21 @@ class _PlayerScreenState extends State<PlayerScreen>
     } catch (e) {
       // DLNA provider 可能不可用，忽略错误
     }
+
+    //add
+    // Catchup 结束检测：位置到达总时长 2 秒以内时触发
+    if (_currentCatchupProgram != null &&
+        !_catchupCompletionHandled &&
+        _playerProvider != null) {
+      final provider = _playerProvider!;
+      final total = provider.duration;
+      final pos = provider.position;
+      if (total.inSeconds > 0 &&
+          pos >= total - const Duration(seconds: 2)) {
+        _catchupCompletionHandled = true;
+        _onPlaybackCompleted();
+      }
+    }
   }
 
   @override
@@ -1021,19 +1036,26 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// Catchup 专用 seek：通过重新生成带偏移起始时间的 URL 实现跳转
   void _seekCatchupTo(Duration offset) {
+    // offset 是相对节目原始开始时间的偏移
+    final originalStart = _catchupOriginalStart;
+    final originalEnd = _catchupOriginalEnd;
+    final channel = _originalChannel;
+    
     final program = _currentCatchupProgram;
     final channel = _originalChannel;
-    if (program == null || channel == null) return;
+    if (originalStart == null || originalEnd == null || program == null || channel == null) return;
   
-    final newStart = program.start.add(offset);
-    if (!newStart.isBefore(program.end)) return;
+    //final newStart = program.start.add(offset);
+    //if (!newStart.isBefore(program.end)) return;
+    final newStart = originalStart.add(offset);
+    if (!newStart.isBefore(originalEnd)) return;
   
     final adjustedProgram = EpgProgram(
       channelId: program.channelId,
       title: program.title,
       description: program.description,
       start: newStart,
-      end: program.end,
+      end: originalEnd,  //program.end,
       category: program.category,
     );
   
@@ -1047,8 +1069,16 @@ class _PlayerScreenState extends State<PlayerScreen>
       catchup: 'active',
     );
   
+    //_currentCatchupProgram = adjustedProgram;
+    //_playerProvider?.setOverrideDuration(program.end.difference(newStart));
+    //_playerProvider?.playChannel(playbackChannel);
+
+    _catchupSeekOffset = offset;          // ← 记录本次 seek 偏移
     _currentCatchupProgram = adjustedProgram;
-    _playerProvider?.setOverrideDuration(program.end.difference(newStart));
+    _catchupCompletionHandled = false;          // ← 重置，否则 seek 后立刻触发结束
+  
+    // 始终保持完整节目时长，不是剩余时长
+    _playerProvider?.setOverrideDuration(originalEnd.difference(originalStart));
     _playerProvider?.playChannel(playbackChannel);
   }
   
@@ -1100,8 +1130,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     return candidates.isEmpty ? null : candidates.first;
   }
 
+  bool _catchupCompletionHandled = false;
+
+  DateTime? _catchupOriginalStart; // 节目原始开始时间，seek 后不变
+  DateTime? _catchupOriginalEnd;   // 节目原始结束时间，seek 后不变
+  Duration _catchupSeekOffset = Duration.zero; // 当前 seek 到的偏移量
+
   // EPG Playback Logic
   void _playCatchup(EpgProgram program) {
+    _catchupCompletionHandled = false; // ← 新增
+    _catchupOriginalStart = program.start;   // ← 新增
+    _catchupOriginalEnd = program.end;       // ← 新增
+    _catchupSeekOffset = Duration.zero;      // ← 新增
+    
     final currentChannel = _playerProvider?.currentChannel;
     if (currentChannel == null) return;
 
@@ -1148,6 +1189,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         duration: const Duration(seconds: 2),
       ),
     );
+
+    // setOverrideDuration 传完整节目时长（原来就是这样，确认一下）
+    final duration = program.end.difference(program.start);
+    _playerProvider?.setOverrideDuration(duration);
   }
 
   void _backToLive() {
@@ -2927,8 +2972,9 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 .withOpacity(0.3),
                           ),
                           child: Slider(
-                            value: (_draggingValue ?? provider.position.inSeconds.toDouble()).clamp(
-                                0, provider.duration.inSeconds.toDouble()),
+                            value: (_draggingValue ??
+                                (_catchupSeekOffset + provider.position).inSeconds.toDouble())
+                                .clamp(0, provider.duration.inSeconds.toDouble()),
                             max: provider.duration.inSeconds
                                 .toDouble()
                                 .clamp(1, double.infinity),

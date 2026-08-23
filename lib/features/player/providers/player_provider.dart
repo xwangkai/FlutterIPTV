@@ -969,8 +969,20 @@ class PlayerProvider extends ChangeNotifier {
     }
   }
 
+  VoidCallback? _onPlaybackCompleted;
+
+  void setCompletionCallback(VoidCallback? callback) {
+    _onPlaybackCompleted = callback;
+  }
+
   void _setupMediaKitListeners() {
     ServiceLocator.log.d('设置播放器监听器', tag: 'PlayerProvider');
+
+    _mediaKitPlayer!.stream.completed.listen((completed) {
+      if (completed) {
+        _onPlaybackCompleted?.call();
+      }
+    });
 
     // 始终激活 mpv 日志监听器，确保所有冗余日志被过滤
     // 不依赖 LogLevel 开关，因为 mpv 日志过滤对于保持输出干净至关重要

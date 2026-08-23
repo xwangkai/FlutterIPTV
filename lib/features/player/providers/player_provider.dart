@@ -978,7 +978,14 @@ class PlayerProvider extends ChangeNotifier {
   void _setupMediaKitListeners() {
     ServiceLocator.log.d('设置播放器监听器', tag: 'PlayerProvider');
 
-    _mediaKitPlayer!.stream.completed.listen((completed) {
+    //_mediaKitPlayer!.stream.completed.listen((completed) {
+    //  if (completed) {
+    //    _onPlaybackCompleted?.call();
+    //  }
+    //});
+
+    // 改成（TV 上 null 安全）
+    _mediaKitPlayer?.stream.completed.listen((completed) {
       if (completed) {
         _onPlaybackCompleted?.call();
       }

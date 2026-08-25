@@ -147,6 +147,8 @@ class NativePlayerFragment : Fragment() {
     private var isCatchupMode = false
     private var currentCatchupUrl = ""
     private var currentCatchupProgram: EpgProgramItem? = null
+    private var catchupStreamStartMs: Long = 0L // 当前回放流的起点（epoch毫秒），服务端快进/快退后更新
+    private var catchupProgramEndMs: Long = 0L // 回放节目的结束时间（epoch毫秒）
     private var epgPanelVisible = false
     private var selectedEpgDateIndex = 0
 
@@ -456,9 +458,22 @@ class NativePlayerFragment : Fragment() {
             override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {
                 Log.d(TAG, "进度条拖动结束")
                 val p = player ?: return
+                val progress = seekBar?.progress ?: 0
+                // 回放模式：进度条拖动走服务端 seek
+                if (isCatchupMode && currentCatchupProgram != null) {
+                    val originalStart = currentCatchupProgram!!.start
+                    val duration = catchupProgramEndMs - originalStart
+                    if (duration > 0) {
+                        val target = originalStart + (duration * progress / 100)
+                        Log.d(TAG, "回放进度条拖动到: ${formatTime(target - originalStart)} (${progress}%)")
+                        seekCatchupTo(target)
+                    }
+                    if (wasPlaying) p.play()
+                    startProgressUpdate()
+                    return
+                }
                 val duration = p.duration
                 if (duration > 0) {
-                    val progress = seekBar?.progress ?: 0
                     val position = (duration * progress / 100)
                     Log.d(TAG, "跳转到位置: ${formatTime(position)} (${progress}%)")
                     p.seekTo(position)
@@ -1003,17 +1018,19 @@ class NativePlayerFragment : Fragment() {
 
     /**
      * 安全快进/快退。
-     * 回放（catchup）流常被 ExoPlayer 识别为直播（duration=C.TIME_UNSET，为极小负数），
-     * 此时若用 coerceAtMost(duration) 会把目标钳制到 TIME_UNSET，seekTo 后从头播放。
-     * 这里改用已知的节目时长（回放）或正数上限，并在目标与当前位置相同时跳过 seek。
+     * 普通流用播放器本地 seekTo；回放（catchup）流多为直播式 HLS，本地 seekTo 不可靠
+     * （duration=C.TIME_UNSET 时 coerceAtMost(duration) 会把目标钳制到 TIME_UNSET，seekTo 后从头播放），
+     * 因此回放改为服务端 seek：用偏移后的节目起点重新生成回放 URL 并重新加载。
      */
     private fun safeSeekBy(deltaMs: Long) {
+        if (isCatchupMode) {
+            seekCatchupServerSide(deltaMs)
+            return
+        }
         val p = player ?: return
         val currentPos = if (p.currentPosition > 0) p.currentPosition else 0L
         val rawDuration = p.duration
         val upper = when {
-            isCatchupMode && currentCatchupProgram != null ->
-                (currentCatchupProgram!!.end - currentCatchupProgram!!.start).coerceAtLeast(1L)
             rawDuration > 0 -> rawDuration
             else -> Long.MAX_VALUE
         }
@@ -1021,6 +1038,39 @@ class NativePlayerFragment : Fragment() {
         if (target == currentPos) return
         Log.d(TAG, "safeSeekBy: $currentPos -> $target (delta=$deltaMs)")
         p.seekTo(target)
+    }
+
+    // 回放流服务端快进/快退：按当前已播位置 ± 步进计算目标节目时间点，重新请求回放 URL
+    private fun seekCatchupServerSide(deltaMs: Long) {
+        val prog = currentCatchupProgram ?: return
+        val nowTotal = catchupStreamStartMs + (player?.currentPosition?.coerceAtLeast(0) ?: 0L)
+        seekCatchupTo(nowTotal + deltaMs)
+    }
+
+    // 回放流服务端跳转：目标为节目时间点（epoch毫秒），重新生成回放 URL 播放
+    private fun seekCatchupTo(targetProgramStartMs: Long) {
+        val prog = currentCatchupProgram ?: return
+        val originalStart = prog.start
+        val end = catchupProgramEndMs
+        val target = targetProgramStartMs.coerceIn(originalStart, end - 1000L)
+        // 目标与当前流起点相同且刚加载（还没播到1秒）时跳过，避免连按造成重复请求
+        val playedMs = player?.currentPosition?.coerceAtLeast(0) ?: 0L
+        if (target == catchupStreamStartMs && playedMs < 500L) return
+
+        val activity = activity as? MainActivity ?: return
+        val idx = currentIndex
+        catchupStreamStartMs = target
+        Log.d(TAG, "seekCatchupTo: target=$target (${formatTime(target - originalStart)} into program, played=$playedMs)")
+        activity.requestCatchupUrl(idx, target, end) { url ->
+            activity.runOnUiThread {
+                if (idx != currentIndex) return@runOnUiThread
+                if (url == null || url.isEmpty()) return@runOnUiThread
+                currentCatchupUrl = url
+                currentUrl = url
+                playUrl(url)
+                showControls()
+            }
+        }
     }
 
     private fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -1539,7 +1589,12 @@ class NativePlayerFragment : Fragment() {
         val idx = currentIndex
         val hasC = channelHasCatchup.getOrElse(idx) { false }
         val days = channelCatchupDays.getOrElse(idx) { 0 }
-        val daysBack = if (hasC && days > 0) days.coerceIn(1, 7) else 1
+        // 未配置 catchup-days 时默认给足 7 天，保证节目列表有多个日期可切换
+        // （不少源的“今天”数据为空，只拉1天会导致面板只有昨天、无法切日期）
+        val daysBack = when {
+            hasC && days > 0 -> days.coerceIn(1, 7)
+            else -> 7
+        }
         Log.d(TAG, "loadEpgPrograms: channelIndex=$idx, hasCatchup=$hasC, daysBack=$daysBack")
         if (epgPanelVisible) {
             epgEmptyText.text = getString(R.string.epg_loading)
@@ -1678,6 +1733,8 @@ class NativePlayerFragment : Fragment() {
                     return@runOnUiThread
                 }
                 currentCatchupProgram = item
+                catchupStreamStartMs = item.start
+                catchupProgramEndMs = item.end
                 isCatchupMode = true
                 currentCatchupUrl = url
                 currentUrl = url
@@ -2927,6 +2984,21 @@ class NativePlayerFragment : Fragment() {
     // DLNA 模式：更新进度条
     private fun updateProgress() {
         val p = player ?: return
+
+        // 回放模式：直播式 HLS 不报告时长，用节目时间轴计算真实进度
+        if (isCatchupMode && currentCatchupProgram != null) {
+            val originalStart = currentCatchupProgram!!.start
+            val duration = catchupProgramEndMs - originalStart
+            if (duration > 0) {
+                val pos = (catchupStreamStartMs + p.currentPosition.coerceAtLeast(0) - originalStart)
+                    .coerceIn(0, duration)
+                progressBar.progress = (pos * 100 / duration).toInt()
+                progressCurrent.text = formatTime(pos)
+                progressDuration.text = formatTime(duration)
+            }
+            return
+        }
+
         val position = p.currentPosition
         val duration = p.duration
         

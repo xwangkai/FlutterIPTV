@@ -7,13 +7,6 @@ on:
         description: 'Version number (e.g., 1.0.0)'
         required: true
         default: '1.0.0'
-  push:
-    branches: [ "main" ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'android/**'
-      - '.github/workflows/build-release.yml'
 
 env:
   FLUTTER_VERSION: '3.44.8'

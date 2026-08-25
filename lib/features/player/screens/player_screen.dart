@@ -1493,8 +1493,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _showControlsTemporarily();
 
     // 临时调试：打印所有按键（确认后删除）
-    if (event is KeyDownEvent && event is! KeyRepeatEvent) {
-      print('KEY: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
+    {
+      final type = event is KeyDownEvent ? (event is KeyRepeatEvent ? 'repeat' : 'down') : 'up';
+      print('KEY[$type]: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
     }
 
     final playerProvider = context.read<PlayerProvider>();

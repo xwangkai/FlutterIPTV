@@ -42,6 +42,12 @@ jobs:
           cache: true
           cache-key: flutter-${{ env.FLUTTER_VERSION }}
 
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LOCALAPPDATA }}\Pub\Cache
+          key: pub-windows-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-windows-
 
       - name: Get dependencies
         run: flutter pub get
@@ -131,6 +137,22 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-linux-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-linux-
+
+      - name: Configure Gradle
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties << 'EOF'
+          org.gradle.caching=true
+          org.gradle.parallel=true
+          org.gradle.jvmargs=-Xmx4096m -XX:+HeapDumpOnOutOfMemoryError
+          EOF
+
       - name: Setup Android Signing
         run: |
           if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
@@ -180,7 +202,6 @@ jobs:
 
       - name: Build Mobile APKs
         run: |
-          flutter clean
           flutter build apk --release --split-per-abi
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/flutteriptv-Android-Mobile-arm64-v8a.apk
@@ -220,6 +241,22 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
+
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-linux-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-linux-
+
+      - name: Configure Gradle
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties << 'EOF'
+          org.gradle.caching=true
+          org.gradle.parallel=true
+          org.gradle.jvmargs=-Xmx4096m -XX:+HeapDumpOnOutOfMemoryError
+          EOF
 
       - name: Setup Android Signing
         run: |
@@ -270,7 +307,6 @@ jobs:
 
       - name: Build TV APKs
         run: |
-          flutter clean
           flutter build apk --release --dart-define=IS_TV=true --split-per-abi
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/flutteriptv-AndroidTV-arm64-v8a.apk

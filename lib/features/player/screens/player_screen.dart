@@ -1492,6 +1492,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     _showControlsTemporarily();
 
+    // 临时调试：打印所有按键（确认后删除）
+    if (event is KeyDownEvent && event is! KeyRepeatEvent) {
+      debugPrint('KEY: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
+    }
+
     final playerProvider = context.read<PlayerProvider>();
     final key = event.logicalKey;
 

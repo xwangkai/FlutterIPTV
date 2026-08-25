@@ -1,15 +1,21 @@
 name: Build and Release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'  # 仅在推送tag时触发
   workflow_dispatch:
     inputs:
       version:
         description: 'Version number (e.g., 1.0.0)'
-        required: true
+        required: false
         default: '1.0.0'
+      build_target:
+        description: 'Build target'
+        required: true
+        type: choice
+        options:
+          - android-tv
+          - android-mobile
+          - all
+        default: 'android-tv'
 
 env:
   FLUTTER_VERSION: '3.44.8'
@@ -21,12 +27,13 @@ jobs:
   # ============================================
   build-windows:
     name: Build Windows
+    if: github.event.inputs.build_target == 'all'
     runs-on: windows-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-      
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -35,13 +42,13 @@ jobs:
           cache: true
           cache-key: flutter-${{ env.FLUTTER_VERSION }}
 
-      
+
       - name: Get dependencies
         run: flutter pub get
-      
+
       - name: Build Windows Release
         run: flutter build windows --release
-      
+
       - name: Download SQLite3 DLL
         run: |
           $urls = @(
@@ -59,10 +66,10 @@ jobs:
             } catch { continue }
           }
         shell: pwsh
-      
+
       - name: Create Installer
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          $version = "${{ github.event.inputs.version }}"
           if (!$version) { $version = "1.0.0" }
           @"
           [Setup]
@@ -89,7 +96,7 @@ jobs:
           "@ | Out-File "installer.iss" -Encoding UTF8
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
         shell: pwsh
-      
+
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v7
         with:
@@ -97,41 +104,35 @@ jobs:
           path: flutteriptv-Windows-x64-Setup.exe
           retention-days: 5
 
+
   # ============================================
-  # Build All Android APKs (Mobile + TV)
+  # Shared Android Signing Setup (reusable steps)
   # ============================================
-  build-android:
-    name: Build Android
+  build-android-mobile:
+    name: Build Android Mobile
+    if: github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'android-mobile'
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-      
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
-      
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
-      
+
       - name: Setup Android Signing
         run: |
-          #echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release-key.jks
-          #cat > android/key.properties << EOF
-          #storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          #keyPassword=${{ secrets.KEY_PASSWORD }}
-          #keyAlias=${{ secrets.KEY_ALIAS }}
-          #storeFile=release-key.jks
-          #EOF
-          # 如果没有配置 KEYSTORE_BASE64，自动生成一个临时密钥库
           if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
             echo "未找到 KEYSTORE_BASE64，自动生成临时密钥库..."
             keytool -genkeypair \
@@ -167,17 +168,16 @@ jobs:
             KEY_PASS="${{ secrets.KEY_PASSWORD }}"
             KEY_ALIAS="${{ secrets.KEY_ALIAS }}"
           fi
-      
           cat > android/key.properties << EOF
           storePassword=${STORE_PASS}
           keyPassword=${KEY_PASS}
           keyAlias=${KEY_ALIAS}
           storeFile=release-key.jks
           EOF
-      
+
       - name: Get dependencies
         run: flutter pub get
-      
+
       - name: Build Mobile APKs
         run: |
           flutter clean
@@ -186,109 +186,180 @@ jobs:
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/flutteriptv-Android-Mobile-arm64-v8a.apk
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/flutteriptv-Android-Mobile-armeabi-v7a.apk
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/flutteriptv-Android-Mobile-x86_64.apk
-      
+
+      - name: Upload Mobile Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-mobile-release
+          path: dist/
+          retention-days: 5
+
+
+  # ============================================
+  # Build Android TV APK
+  # ============================================
+  build-android-tv:
+    name: Build Android TV
+    if: github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'android-tv'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Setup Android Signing
+        run: |
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "未找到 KEYSTORE_BASE64，自动生成临时密钥库..."
+            keytool -genkeypair \
+              -alias release \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 36500 \
+              -storetype JKS \
+              -keystore android/app/release-key.jks \
+              -storepass android123 \
+              -keypass android123 \
+              -dname "CN=FlutterIPTV, O=FlutterIPTV, C=CN" \
+              -noprompt
+            STORE_PASS="android123"
+            KEY_PASS="android123"
+            KEY_ALIAS="release"
+          else
+            echo "使用 Secret 中的密钥库..."
+            echo "${{ secrets.KEYSTORE_BASE64 }}" \
+              | tr -d '[:space:]' \
+              | base64 --decode > android/app/release-key-orig.jks
+            keytool -importkeystore \
+              -srckeystore android/app/release-key-orig.jks \
+              -destkeystore android/app/release-key.jks \
+              -deststoretype JKS \
+              -srcstorepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+              -deststorepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+              -srcalias "${{ secrets.KEY_ALIAS }}" \
+              -destalias "${{ secrets.KEY_ALIAS }}" \
+              -noprompt 2>&1 | grep -v "^Warning"
+            rm -f android/app/release-key-orig.jks
+            STORE_PASS="${{ secrets.KEYSTORE_PASSWORD }}"
+            KEY_PASS="${{ secrets.KEY_PASSWORD }}"
+            KEY_ALIAS="${{ secrets.KEY_ALIAS }}"
+          fi
+          cat > android/key.properties << EOF
+          storePassword=${STORE_PASS}
+          keyPassword=${KEY_PASS}
+          keyAlias=${KEY_ALIAS}
+          storeFile=release-key.jks
+          EOF
+
+      - name: Get dependencies
+        run: flutter pub get
+
       - name: Build TV APKs
         run: |
           flutter clean
           flutter build apk --release --dart-define=IS_TV=true --split-per-abi
+          mkdir -p dist
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/flutteriptv-AndroidTV-arm64-v8a.apk
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/flutteriptv-AndroidTV-armeabi-v7a.apk
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/flutteriptv-AndroidTV-x86_64.apk
-      
-      - name: Upload Android Artifacts
+
+      - name: Upload TV Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: android-release
+          name: android-tv-release
           path: dist/
           retention-days: 5
 
+
   # ============================================
-  # Create GitHub Release
+  # Create GitHub Release (only when building all)
   # ============================================
   create-release:
     name: Create Release
-    needs: [build-windows, build-android]
+    if: github.event.inputs.build_target == 'all'
+    needs: [build-windows, build-android-mobile, build-android-tv]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      
+
       - name: Download Artifacts
         uses: actions/download-artifact@v7
         with:
           path: ./release-assets/
-      
+
       - name: Get version
         id: version
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "TAG=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "CREATE_RELEASE=true" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-            echo "CREATE_RELEASE=true" >> $GITHUB_OUTPUT
-          else
-            echo "VERSION=dev-build" >> $GITHUB_OUTPUT
-            echo "TAG=dev-build" >> $GITHUB_OUTPUT
-            echo "CREATE_RELEASE=false" >> $GITHUB_OUTPUT
-          fi
-      
+          echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          echo "TAG=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+
       - name: Generate Release Notes
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           TAG="${{ steps.version.outputs.TAG }}"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}"
-          
-          # Read changelog from version.json
+
           if [ -f "docs/version.json" ]; then
             CHANGELOG_ZH=$(jq -r '.changelog.zh' docs/version.json)
             CHANGELOG_EN=$(jq -r '.changelog.en' docs/version.json)
           else
-            # Fallback to git commits if version.json not found
             PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -1)
             if [ -n "$PREV_TAG" ]; then
-              CHANGELOG_ZH=$(git log --pretty=format:"- %s" ${PREV_TAG}..${TAG} 2>/dev/null | grep -v "^- Merge" || echo "- Bug fixes and improvements")
+              CHANGELOG_ZH=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD 2>/dev/null | grep -v "^- Merge" || echo "- Bug fixes and improvements")
               CHANGELOG_EN="${CHANGELOG_ZH}"
             else
               CHANGELOG_ZH="- 初始版本"
               CHANGELOG_EN="- Initial release"
             fi
           fi
-          
+
           cat > release_notes.md << EOF
           ## 📺 FlutterIPTV ${VERSION}
-          
+
           ### 📝 更新内容 What's New
-          
+
           **中文 Chinese:**
           ${CHANGELOG_ZH}
-          
+
           **English:**
           ${CHANGELOG_EN}
-          
+
           ---
-          
+
           ### 📥 下载 Downloads
-          
+
           #### 🖥️ Windows
           | 文件 | 说明 |
           |------|------|
           | [flutteriptv-Windows-x64-Setup.exe](${BASE_URL}/flutteriptv-Windows-x64-Setup.exe) | Windows 64位安装包 |
-          
+
           #### 📱 Android 手机版
           | 文件 | 说明 |
           |------|------|
           | [flutteriptv-Android-Mobile-arm64-v8a.apk](${BASE_URL}/flutteriptv-Android-Mobile-arm64-v8a.apk) | 64位 ARM 设备（推荐） |
           | [flutteriptv-Android-Mobile-armeabi-v7a.apk](${BASE_URL}/flutteriptv-Android-Mobile-armeabi-v7a.apk) | 32位 ARM 设备 |
           | [flutteriptv-Android-Mobile-x86_64.apk](${BASE_URL}/flutteriptv-Android-Mobile-x86_64.apk) | x86_64 模拟器 |
-          
+
           #### 📺 Android TV 电视版
           | 文件 | 说明 |
           |------|------|
@@ -296,22 +367,17 @@ jobs:
           | [flutteriptv-AndroidTV-armeabi-v7a.apk](${BASE_URL}/flutteriptv-AndroidTV-armeabi-v7a.apk) | 32位 ARM 电视 |
           | [flutteriptv-AndroidTV-x86_64.apk](${BASE_URL}/flutteriptv-AndroidTV-x86_64.apk) | x86_64 电视模拟器 |
           EOF
-      
+
       - name: Delete Existing Release (if any)
-        if: steps.version.outputs.CREATE_RELEASE == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.TAG }}
         run: |
-          # 删除已存在的同名 release 和 tag，避免 softprops 复用旧 release 而不上传资产
-          # 依赖 gh CLI（ubuntu-latest 自带）
           gh release delete "$TAG" --yes --cleanup-tag || true
           echo "已清理 tag $TAG 的旧 release（若存在）"
 
       - name: Locate Assets
         run: |
-          # actions/download-artifact@v7 的目录结构因版本而异（可能是子目录或直接在根目录）
-          # 用 find 定位实际的安装包并复制到固定路径，避免路径硬编码导致的资产丢失
           mkdir -p ./release-assets/staged
           find ./release-assets -name "flutteriptv-Windows-x64-Setup.exe" -exec cp {} ./release-assets/staged/ \;
           find ./release-assets -name "*.apk" -exec cp {} ./release-assets/staged/ \;
@@ -323,7 +389,6 @@ jobs:
           fi
 
       - name: Create Release
-        if: steps.version.outputs.CREATE_RELEASE == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
@@ -341,10 +406,3 @@ jobs:
             release-assets/staged/flutteriptv-AndroidTV-x86_64.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Complete (No Release)
-        if: steps.version.outputs.CREATE_RELEASE == 'false'
-        run: |
-          echo "✅ Build completed successfully!"
-          echo "📦 Artifacts created but no release published (branch push)"
-          echo "🏷️ To create a release, push a tag (v1.0.0) or use workflow_dispatch"

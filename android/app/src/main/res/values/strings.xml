@@ -22,6 +22,19 @@
     <string name="category">Category</string>
     <string name="channels">Channels</string>
     
+    <!-- EPG / Catchup -->
+    <string name="epg_program_guide">Program Guide</string>
+    <string name="epg_loading">Loading program guide…</string>
+    <string name="epg_no_programs">No program guide for this channel</string>
+    <string name="epg_date_today">Today</string>
+    <string name="epg_date_yesterday">Yesterday</string>
+    <string name="epg_live">LIVE</string>
+    <string name="epg_play_catchup">Replay</string>
+    <string name="epg_upcoming">Upcoming</string>
+    <string name="epg_footer_hint">←→ Day · ↑↓ Select · OK Replay · Back Close · Menu Back to Live</string>
+    <string name="epg_catchup_not_supported">This channel does not support replay</string>
+    <string name="epg_playing_catchup">Replaying: %s</string>
+    
     <!-- Multi-screen -->
     <string name="multi_screen_mode">Multi-screen Mode</string>
     <string name="press_back_to_exit">Press Back to exit</string>

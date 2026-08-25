@@ -22,6 +22,19 @@
     <string name="category">分类</string>
     <string name="channels">频道</string>
     
+    <!-- EPG / 回放 -->
+    <string name="epg_program_guide">节目单 / 回放</string>
+    <string name="epg_loading">正在加载节目单…</string>
+    <string name="epg_no_programs">该频道暂无节目单</string>
+    <string name="epg_date_today">今天</string>
+    <string name="epg_date_yesterday">昨天</string>
+    <string name="epg_live">直播</string>
+    <string name="epg_play_catchup">回放</string>
+    <string name="epg_upcoming">未开始</string>
+    <string name="epg_footer_hint">←→ 切换日期 · ↑↓ 选择节目 · OK 回放 · 返回 关闭 · 菜单 回到直播</string>
+    <string name="epg_catchup_not_supported">该频道不支持回放</string>
+    <string name="epg_playing_catchup">正在回放: %s</string>
+    
     <!-- Multi-screen -->
     <string name="multi_screen_mode">分屏模式</string>
     <string name="press_back_to_exit">返回键退出</string>

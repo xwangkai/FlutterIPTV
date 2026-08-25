@@ -57,6 +57,14 @@ class NativePlayerFragment : Fragment() {
     private lateinit var epgCurrentTitle: TextView
     private lateinit var epgCurrentTime: TextView
     private lateinit var epgNextTitle: TextView
+
+    // EPG / Catchup panel views (program list)
+    private lateinit var epgPanel: View
+    private lateinit var epgPanelTitle: TextView
+    private lateinit var epgDateList: RecyclerView
+    private lateinit var epgProgramList: RecyclerView
+    private lateinit var epgEmptyText: TextView
+    private lateinit var epgFooterHint: TextView
     
     // Progress views (DLNA mode)
     private lateinit var progressContainer: View
@@ -131,7 +139,21 @@ class NativePlayerFragment : Fragment() {
     private var channelLogos: ArrayList<String> = arrayListOf()
     private var channelEpgIds: ArrayList<String> = arrayListOf()
     private var channelIsSeekable: ArrayList<Boolean> = arrayListOf() // 每个频道是否可拖动
+    private var channelHasCatchup: ArrayList<Boolean> = arrayListOf() // 每个频道是否支持回放
+    private var channelCatchupDays: ArrayList<Int> = arrayListOf() // 每个频道的回放天数
     private var isDlnaMode: Boolean = false
+
+    // 回放（catchup）状态
+    private var isCatchupMode = false
+    private var currentCatchupUrl = ""
+    private var currentCatchupProgram: EpgProgramItem? = null
+    private var epgPanelVisible = false
+    private var selectedEpgDateIndex = 0
+
+    // EPG 节目数据（由 Flutter 端 EpgService 提供）
+    private val epgPrograms = mutableListOf<EpgProgramItem>()
+    private val epgDates = mutableListOf<String>() // 日期降序（今天在前）
+    private val epgProgramsByDate = mutableMapOf<String, MutableList<EpgProgramItem>>()
     private var bufferStrength: String = "fast"
     private var progressBarMode: String = "auto" // 进度条显示模式：auto, always, never
     private var seekStepSeconds: Int = 10 // 快进/快退跨度（秒）
@@ -231,6 +253,8 @@ class NativePlayerFragment : Fragment() {
         private const val ARG_INITIAL_SOURCE_INDEX = "initial_source_index"
         private const val ARG_USER_AGENT = "user_agent"
         private const val ARG_SHOW_USER_AGENT = "show_user_agent"
+        private const val ARG_CHANNEL_HAS_CATCHUP = "channel_has_catchup"
+        private const val ARG_CHANNEL_CATCHUP_DAYS = "channel_catchup_days"
 
         fun newInstance(
             videoUrl: String,
@@ -253,7 +277,9 @@ class NativePlayerFragment : Fragment() {
             seekStepSeconds: Int = 10,
             initialSourceIndex: Int = 0,
             userAgent: String = "Wget/1.21.3",
-            showUserAgent: Boolean = false
+            showUserAgent: Boolean = false,
+            channelHasCatchup: ArrayList<Boolean>? = null,
+            channelCatchupDays: ArrayList<Int>? = null
         ): NativePlayerFragment {
             return NativePlayerFragment().apply {
                 arguments = Bundle().apply {
@@ -278,6 +304,8 @@ class NativePlayerFragment : Fragment() {
                     putInt(ARG_INITIAL_SOURCE_INDEX, initialSourceIndex)
                     putString(ARG_USER_AGENT, userAgent)
                     putBoolean(ARG_SHOW_USER_AGENT, showUserAgent)
+                    channelHasCatchup?.let { putBooleanArray(ARG_CHANNEL_HAS_CATCHUP, it.toBooleanArray()) }
+                    channelCatchupDays?.let { putIntegerArrayList(ARG_CHANNEL_CATCHUP_DAYS, it) }
                 }
             }
         }
@@ -322,6 +350,10 @@ class NativePlayerFragment : Fragment() {
             currentSourceIndex = it.getInt(ARG_INITIAL_SOURCE_INDEX, 0) // 使用传入的初始源索引
             userAgent = it.getString(ARG_USER_AGENT, "Wget/1.21.3") ?: "Wget/1.21.3"
             showUserAgent = it.getBoolean(ARG_SHOW_USER_AGENT, false)
+            // 读取回放相关数据
+            val hasCatchupArray = it.getBooleanArray(ARG_CHANNEL_HAS_CATCHUP)
+            channelHasCatchup = if (hasCatchupArray != null) ArrayList(hasCatchupArray.toList()) else arrayListOf()
+            channelCatchupDays = it.getIntegerArrayList(ARG_CHANNEL_CATCHUP_DAYS) ?: arrayListOf()
         }
         
         Log.d(TAG, "=== 参数读取完成 ===")
@@ -444,6 +476,16 @@ class NativePlayerFragment : Fragment() {
         sourceIndicator = view.findViewById(R.id.source_indicator)
         sourceText = view.findViewById(R.id.source_text)
 
+        // EPG / Catchup panel views
+        epgPanel = view.findViewById(R.id.epg_panel)
+        epgPanelTitle = view.findViewById(R.id.epg_panel_title)
+        epgDateList = view.findViewById(R.id.epg_date_list)
+        epgProgramList = view.findViewById(R.id.epg_program_list)
+        epgEmptyText = view.findViewById(R.id.epg_empty_text)
+        epgFooterHint = view.findViewById(R.id.epg_footer_hint)
+        epgDateList.layoutManager = LinearLayoutManager(requireContext(), RecyclerView.HORIZONTAL, false)
+        epgProgramList.layoutManager = LinearLayoutManager(requireContext())
+
         channelNameText.text = currentName
         updateStatus("Loading")
         
@@ -545,6 +587,9 @@ class NativePlayerFragment : Fragment() {
         
         // 初始化EPG信息
         refreshEpgInfo()
+
+        // 预加载节目单（供回放面板与播完自动连播使用）
+        loadEpgPrograms()
 
         // Start network speed update
         startNetworkSpeedUpdate()
@@ -929,9 +974,21 @@ class NativePlayerFragment : Fragment() {
     }
 
     private fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        Log.d(TAG, "handleKeyDown: keyCode=$keyCode, categoryPanelVisible=$categoryPanelVisible, isDlnaMode=$isDlnaMode, progressBarHasFocus=${progressBar.hasFocus()}")
+        Log.d(TAG, "handleKeyDown: keyCode=$keyCode, categoryPanelVisible=$categoryPanelVisible, epgPanelVisible=$epgPanelVisible, isDlnaMode=$isDlnaMode, progressBarHasFocus=${progressBar.hasFocus()}")
+        
+        // EPG 节目单面板打开时，按键由面板专用处理接管
+        if (epgPanelVisible) {
+            return handleEpgPanelKeyDown(keyCode, event)
+        }
         
         when (keyCode) {
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_MEDIA_TOP_MENU -> {
+                // 菜单键：打开/关闭节目单（回放）面板
+                if (!categoryPanelVisible) {
+                    toggleEpgPanel()
+                }
+                return true
+            }
             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                 // 如果正在拖动进度，先退出拖动模式
                 if (isSeekingWithLeftRight) {
@@ -1187,6 +1244,10 @@ class NativePlayerFragment : Fragment() {
     }
     
     private fun handleKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        // EPG 节目单面板打开时，忽略按键抬起（避免触发频道/源切换）
+        if (epgPanelVisible) {
+            return true
+        }
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                 // 重置长按标志
@@ -1411,6 +1472,354 @@ class NativePlayerFragment : Fragment() {
         return false
     }
 
+    // ==================== EPG / Catchup（回放）====================
+
+    private fun handleEpgPanelKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        return when (keyCode) {
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE,
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_MEDIA_TOP_MENU -> {
+                closeEpgPanel()
+                true
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (event.repeatCount == 0) switchEpgDate(-1)
+                true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (event.repeatCount == 0) switchEpgDate(1)
+                true
+            }
+            // 其余方向键/OK 在节目单面板打开时全部消费，避免触发频道/源切换
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> true
+            else -> false
+        }
+    }
+
+    private fun toggleEpgPanel() {
+        if (epgPanelVisible) closeEpgPanel() else openEpgPanel()
+    }
+
+    private fun openEpgPanel() {
+        if (isDlnaMode || currentIndex < 0) return
+        Log.d(TAG, "openEpgPanel: channel=$currentName")
+        epgPanelVisible = true
+        epgPanel.visibility = View.VISIBLE
+        epgPanelTitle.text = if (currentIndex < channelNames.size) channelNames[currentIndex] else currentName
+        hideControlsRunnable?.let { handler.removeCallbacks(it) }
+        loadEpgPrograms()
+        epgProgramList.post { epgProgramList.requestFocus() }
+    }
+
+    private fun closeEpgPanel() {
+        epgPanelVisible = false
+        epgPanel.visibility = View.GONE
+        view?.requestFocus()
+        scheduleHideControls()
+    }
+
+    private fun loadEpgPrograms() {
+        val activity = activity as? MainActivity ?: return
+        val idx = currentIndex
+        val hasC = channelHasCatchup.getOrElse(idx) { false }
+        val days = channelCatchupDays.getOrElse(idx) { 0 }
+        val daysBack = if (hasC && days > 0) days.coerceIn(1, 7) else 1
+        Log.d(TAG, "loadEpgPrograms: channelIndex=$idx, hasCatchup=$hasC, daysBack=$daysBack")
+        if (epgPanelVisible) {
+            epgEmptyText.text = getString(R.string.epg_loading)
+            epgEmptyText.visibility = View.VISIBLE
+        }
+        activity.requestEpgPrograms(idx, daysBack) { result ->
+            activity.runOnUiThread {
+                // 频道已切换，丢弃过期数据
+                if (idx != currentIndex) return@runOnUiThread
+                epgPrograms.clear()
+                epgProgramsByDate.clear()
+                epgDates.clear()
+                if (result != null && result.isNotEmpty()) {
+                    for (raw in result) {
+                        val item = EpgProgramItem(
+                            title = raw["title"] as? String ?: "",
+                            description = raw["description"] as? String,
+                            category = raw["category"] as? String,
+                            start = (raw["start"] as? Number)?.toLong() ?: 0L,
+                            end = (raw["end"] as? Number)?.toLong() ?: 0L,
+                            canCatchup = raw["canCatchup"] as? Boolean ?: false,
+                            isLive = raw["isLive"] as? Boolean ?: false,
+                            date = raw["date"] as? String ?: ""
+                        )
+                        epgPrograms.add(item)
+                    }
+                    epgPrograms.sortBy { it.start }
+                    val dateSet = linkedSetOf<String>()
+                    for (p in epgPrograms) dateSet.add(p.date)
+                    epgDates.addAll(dateSet.sortedDescending())
+                    for (d in epgDates) {
+                        epgProgramsByDate[d] = epgPrograms.filter { it.date == d }.toMutableList()
+                    }
+                }
+                // 面板未打开时只更新数据（供播完自动连播使用），不更新 UI
+                if (!epgPanelVisible) return@runOnUiThread
+                val todayKey = todayDateKey()
+                selectedEpgDateIndex = epgDates.indexOf(todayKey).takeIf { it >= 0 } ?: 0
+                epgDateList.adapter = EpgDateAdapter(epgDates)
+                updateEpgProgramList()
+                if (epgPrograms.isEmpty()) {
+                    epgEmptyText.text = getString(R.string.epg_no_programs)
+                    epgEmptyText.visibility = View.VISIBLE
+                }
+                epgDateList.post { scrollDateToSelected() }
+            }
+        }
+    }
+
+    private fun onDateSelected(index: Int) {
+        if (index < 0 || index >= epgDates.size) return
+        selectedEpgDateIndex = index
+        updateEpgProgramList()
+    }
+
+    private fun switchEpgDate(dir: Int) {
+        if (epgDates.isEmpty()) return
+        selectedEpgDateIndex = (selectedEpgDateIndex + dir + epgDates.size) % epgDates.size
+        updateEpgProgramList()
+        scrollDateToSelected()
+    }
+
+    private fun scrollDateToSelected() {
+        epgDateList.scrollToPosition(selectedEpgDateIndex)
+        epgDateList.findViewHolderForAdapterPosition(selectedEpgDateIndex)?.itemView?.requestFocus()
+    }
+
+    private fun updateEpgProgramList() {
+        val date = epgDates.getOrNull(selectedEpgDateIndex)
+        if (date == null) {
+            epgProgramList.adapter = EpgProgramAdapter(emptyList())
+            return
+        }
+        val programs = epgProgramsByDate[date] ?: emptyList()
+        epgProgramList.adapter = EpgProgramAdapter(programs)
+        if (programs.isEmpty()) {
+            epgEmptyText.text = getString(R.string.epg_no_programs)
+            epgEmptyText.visibility = View.VISIBLE
+        } else {
+            epgEmptyText.visibility = View.GONE
+            epgProgramList.post {
+                val focusIndex = programs.indexOfFirst { it.isLive || it.canCatchup }
+                    .takeIf { it >= 0 } ?: 0
+                epgProgramList.findViewHolderForAdapterPosition(focusIndex)?.itemView?.requestFocus()
+            }
+        }
+    }
+
+    private fun todayDateKey(): String {
+        return java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            .format(java.util.Date())
+    }
+
+    private fun dateLabel(date: String): String {
+        val today = todayDateKey()
+        val yesterday = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+            .format(java.util.Date(System.currentTimeMillis() - 24 * 60 * 60 * 1000L))
+        return when (date) {
+            today -> getString(R.string.epg_date_today)
+            yesterday -> getString(R.string.epg_date_yesterday)
+            else -> date.takeLast(5) // MM-dd
+        }
+    }
+
+    private fun onProgramSelected(item: EpgProgramItem) {
+        when {
+            item.canCatchup -> playCatchupProgram(item)
+            item.isLive -> closeEpgPanel() // 正在直播，无需操作
+            else -> android.widget.Toast.makeText(
+                requireContext(),
+                getString(R.string.epg_upcoming),
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun playCatchupProgram(item: EpgProgramItem) {
+        val activity = activity as? MainActivity ?: return
+        val idx = currentIndex
+        Log.d(TAG, "playCatchupProgram: ${item.title} (${item.start} - ${item.end})")
+        // 确保节目数据已加载（供播完自动连播使用）
+        if (epgPrograms.isEmpty()) loadEpgPrograms()
+        activity.requestCatchupUrl(idx, item.start, item.end) { url ->
+            activity.runOnUiThread {
+                // 频道已切换，丢弃过期响应
+                if (idx != currentIndex) return@runOnUiThread
+                if (url == null || url.isEmpty()) {
+                    android.widget.Toast.makeText(
+                        requireContext(),
+                        getString(R.string.epg_catchup_not_supported),
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    return@runOnUiThread
+                }
+                currentCatchupProgram = item
+                isCatchupMode = true
+                currentCatchupUrl = url
+                currentUrl = url
+                // 播放期间在频道名位置显示节目标题
+                channelNameText.text = item.title
+                channelNameText.visibility = View.VISIBLE
+                closeEpgPanel()
+                updateProgressBarVisibility() // 回放模式强制显示进度条
+                playUrl(url)
+                showControls()
+                android.widget.Toast.makeText(
+                    requireContext(),
+                    getString(R.string.epg_playing_catchup, item.title),
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    // 回放播完自动连播，或回到直播
+    private fun handleCatchupEnded() {
+        val current = currentCatchupProgram
+        if (current == null) {
+            exitCatchupToLive()
+            return
+        }
+        val nowMs = System.currentTimeMillis()
+        val next = epgPrograms.filter { it.start >= current.end }.minByOrNull { it.start }
+        if (next != null && next.end > nowMs) {
+            // 下一个节目还在播出（直播中）→ 回到直播
+            Log.d(TAG, "Catchup ended, next program is live, returning to live")
+            exitCatchupToLive()
+        } else if (next != null) {
+            // 下一个节目已结束 → 自动连播
+            Log.d(TAG, "Catchup ended, auto-playing next: ${next.title}")
+            playCatchupProgram(next)
+        } else {
+            exitCatchupToLive()
+        }
+    }
+
+    // 退出回放，恢复直播播放
+    private fun exitCatchupToLive() {
+        Log.d(TAG, "exitCatchupToLive")
+        isCatchupMode = false
+        currentCatchupProgram = null
+        currentCatchupUrl = ""
+        if (currentIndex in channelNames.indices) {
+            currentName = channelNames[currentIndex]
+        }
+        updateSourceIndicator() // 恢复频道名显示
+        val sources = getCurrentSources()
+        val liveUrl = if (sources.isNotEmpty() && currentSourceIndex < sources.size) {
+            sources[currentSourceIndex]
+        } else {
+            currentUrl
+        }
+        currentUrl = liveUrl
+        updateProgressBarVisibility() // 恢复进度条显示设置
+        playUrl(liveUrl)
+        showControls()
+    }
+
+    // 切换到其他频道时清理回放状态（不触发播放）
+    private fun exitCatchupState() {
+        isCatchupMode = false
+        currentCatchupProgram = null
+        currentCatchupUrl = ""
+        epgPanelVisible = false
+        epgPanel.visibility = View.GONE
+    }
+
+    private fun formatProgramTime(epochMs: Long): String {
+        return java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(epochMs))
+    }
+
+    // EPG 节目列表适配器
+    inner class EpgProgramAdapter(private val programs: List<EpgProgramItem>) :
+        RecyclerView.Adapter<EpgProgramViewHolder>() {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): EpgProgramViewHolder {
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_epg_program, parent, false)
+            return EpgProgramViewHolder(view)
+        }
+
+        override fun onBindViewHolder(holder: EpgProgramViewHolder, position: Int) {
+            val item = programs[position]
+            holder.timeText.text = "${formatProgramTime(item.start)} - ${formatProgramTime(item.end)}"
+            holder.titleText.text = item.title
+            holder.statusText.text = when {
+                item.isLive -> getString(R.string.epg_live)
+                item.canCatchup -> getString(R.string.epg_play_catchup)
+                else -> getString(R.string.epg_upcoming)
+            }
+            holder.statusText.setTextColor(when {
+                item.isLive -> 0xFF4CAF50.toInt()
+                item.canCatchup -> 0xFFE91E63.toInt()
+                else -> 0xFF9E9E9E.toInt()
+            })
+            holder.itemView.setOnClickListener { onProgramSelected(item) }
+            holder.itemView.setOnFocusChangeListener { v, hasFocus -> v.isSelected = hasFocus }
+            holder.itemView.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                            closeEpgPanel()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                            onProgramSelected(item)
+                            true
+                        }
+                        else -> false
+                    }
+                } else {
+                    false
+                }
+            }
+        }
+
+        override fun getItemCount() = programs.size
+    }
+
+    // EPG 日期列表适配器
+    inner class EpgDateAdapter(private val dates: List<String>) :
+        RecyclerView.Adapter<EpgDateViewHolder>() {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): EpgDateViewHolder {
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_epg_date, parent, false)
+            return EpgDateViewHolder(view)
+        }
+
+        override fun onBindViewHolder(holder: EpgDateViewHolder, position: Int) {
+            val date = dates[position]
+            holder.dateText.text = dateLabel(date)
+            holder.itemView.isSelected = position == selectedEpgDateIndex
+            holder.itemView.setOnClickListener { onDateSelected(position) }
+            holder.itemView.setOnFocusChangeListener { v, hasFocus ->
+                v.isSelected = hasFocus || position == selectedEpgDateIndex
+            }
+            holder.itemView.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                            closeEpgPanel()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                            onDateSelected(position)
+                            true
+                        }
+                        else -> false
+                    }
+                } else {
+                    false
+                }
+            }
+        }
+
+        override fun getItemCount() = dates.size
+    }
+
     private fun initializePlayer() {
         Log.d(TAG, "Initializing ExoPlayer")
         
@@ -1476,6 +1885,10 @@ class NativePlayerFragment : Fragment() {
                             NativeLogger.d(TAG, "播放器状态: ENDED")
                             updateStatus("Ended")
                             stopFpsCalculation()
+                            // 回放播完自动连播/回到直播
+                            if (isCatchupMode) {
+                                handleCatchupEnded()
+                            }
                         }
                         Player.STATE_IDLE -> {
                             NativeLogger.d(TAG, "播放器状态: IDLE")
@@ -2027,6 +2440,9 @@ class NativePlayerFragment : Fragment() {
             return
         }
         
+        // 切换频道时退出回放状态
+        exitCatchupState()
+        
         // 增加验证 ID，立即使所有之前的后台任务失效
         currentVerificationId++
         val myVerificationId = currentVerificationId
@@ -2056,6 +2472,8 @@ class NativePlayerFragment : Fragment() {
         showControls()
         // 更新EPG信息
         refreshEpgInfo()
+        // 预加载节目单（供回放面板与播完自动连播使用）
+        loadEpgPrograms()
         
         Log.d(TAG, "切换到频道: $currentName")
         
@@ -2419,6 +2837,15 @@ class NativePlayerFragment : Fragment() {
         Log.d(TAG, "currentIndex: $currentIndex")
         Log.d(TAG, "channelIsSeekable.size: ${channelIsSeekable.size}")
         
+        // 回放（catchup）模式下强制显示进度条
+        if (isCatchupMode) {
+            Log.d(TAG, "回放模式 - 强制显示进度条")
+            progressContainer.visibility = View.VISIBLE
+            helpText.visibility = View.GONE
+            startProgressUpdate()
+            return
+        }
+
         // DLNA 模式下强制显示进度条
         if (isDlnaMode) {
             Log.d(TAG, "DLNA 模式 - 强制显示进度条")
@@ -2637,10 +3064,15 @@ class NativePlayerFragment : Fragment() {
             if (p.playbackState == Player.STATE_IDLE || p.playbackState == Player.STATE_ENDED) {
                 // 播放器处于空闲或结束状态，需要重新加载
                 Log.d(TAG, "Player in IDLE/ENDED state, reloading media...")
-                val sources = getCurrentSources()
-                if (sources.isNotEmpty() && currentSourceIndex < sources.size) {
-                    val urlToPlay = sources[currentSourceIndex]
-                    playUrl(urlToPlay)
+                if (isCatchupMode && currentCatchupUrl.isNotEmpty()) {
+                    Log.d(TAG, "onResume: reloading catchup URL")
+                    playUrl(currentCatchupUrl)
+                } else {
+                    val sources = getCurrentSources()
+                    if (sources.isNotEmpty() && currentSourceIndex < sources.size) {
+                        val urlToPlay = sources[currentSourceIndex]
+                        playUrl(urlToPlay)
+                    }
                 }
             } else {
                 // 播放器状态正常，直接恢复播放
@@ -2650,10 +3082,15 @@ class NativePlayerFragment : Fragment() {
             // 播放器不存在，重新初始化并播放
             Log.d(TAG, "Player is null, reinitializing...")
             initializePlayer()
-            val sources = getCurrentSources()
-            if (sources.isNotEmpty() && currentSourceIndex < sources.size) {
-                val urlToPlay = sources[currentSourceIndex]
-                playUrl(urlToPlay)
+            if (isCatchupMode && currentCatchupUrl.isNotEmpty()) {
+                Log.d(TAG, "onResume: reloading catchup URL")
+                playUrl(currentCatchupUrl)
+            } else {
+                val sources = getCurrentSources()
+                if (sources.isNotEmpty() && currentSourceIndex < sources.size) {
+                    val urlToPlay = sources[currentSourceIndex]
+                    playUrl(urlToPlay)
+                }
             }
         }
     }
@@ -2685,7 +3122,17 @@ class NativePlayerFragment : Fragment() {
     // Data classes
     data class CategoryItem(val name: String, val count: Int)
     data class ChannelItem(val index: Int, val name: String, val isPlaying: Boolean)
-    
+    data class EpgProgramItem(
+        val title: String,
+        val description: String?,
+        val category: String?,
+        val start: Long,
+        val end: Long,
+        val canCatchup: Boolean,
+        val isLive: Boolean,
+        val date: String
+    )
+
     // ViewHolders
     class CategoryViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val nameText: TextView = view.findViewById(R.id.category_name)
@@ -2695,5 +3142,15 @@ class NativePlayerFragment : Fragment() {
     class ChannelViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val nameText: TextView = view.findViewById(R.id.channel_name)
         val playingIcon: ImageView = view.findViewById(R.id.playing_icon)
+    }
+
+    class EpgProgramViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val timeText: TextView = view.findViewById(R.id.epg_program_time)
+        val titleText: TextView = view.findViewById(R.id.epg_program_title)
+        val statusText: TextView = view.findViewById(R.id.epg_program_status)
+    }
+
+    class EpgDateViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val dateText: TextView = view.findViewById(R.id.epg_date_text)
     }
 }

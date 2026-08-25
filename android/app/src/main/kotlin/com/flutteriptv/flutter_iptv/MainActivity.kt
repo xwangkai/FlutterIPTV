@@ -132,6 +132,8 @@ class MainActivity: FlutterFragmentActivity() {
                     val logos = call.argument<List<String>>("logos") // 每个频道的台标URL
                     val epgIds = call.argument<List<String>>("epgIds") // 每个频道的EPG ID
                     val isSeekable = call.argument<List<Boolean>>("isSeekable") // 每个频道是否可拖动
+                    val hasCatchup = call.argument<List<Boolean>>("hasCatchup") // 每个频道是否支持回放
+                    val catchupDays = call.argument<List<Int>>("catchupDays") // 每个频道的回放天数
                     val isDlnaMode = call.argument<Boolean>("isDlnaMode") ?: false
                     val bufferStrength = call.argument<String>("bufferStrength") ?: "fast"
                     val showFps = call.argument<Boolean>("showFps") ?: true
@@ -150,7 +152,7 @@ class MainActivity: FlutterFragmentActivity() {
                     if (url != null) {
                         Log.d(TAG, "Launching native player fragment: $name (index $index of ${urls?.size ?: 0}, isDlna=$isDlnaMode, logos=${logos?.size ?: 0}, isSeekable=${isSeekable?.getOrNull(index)}, progressBarMode=$progressBarMode, seekStepSeconds=$seekStepSeconds, showChannelName=$showChannelName, userAgent=$userAgent, showUserAgent=$showUserAgent)")
                         try {
-                            showPlayerFragment(url, name, index, urls, names, groups, sources, logos, epgIds, isSeekable, isDlnaMode, bufferStrength, showFps, showClock, showNetworkSpeed, showVideoInfo, progressBarMode, seekStepSeconds, userAgent = userAgent, showUserAgent = showUserAgent)
+                            showPlayerFragment(url, name, index, urls, names, groups, sources, logos, epgIds, isSeekable, isDlnaMode, bufferStrength, showFps, showClock, showNetworkSpeed, showVideoInfo, progressBarMode, seekStepSeconds, userAgent = userAgent, showUserAgent = showUserAgent, hasCatchup = hasCatchup, catchupDays = catchupDays)
                             result.success(true)
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to launch player", e)
@@ -315,7 +317,9 @@ class MainActivity: FlutterFragmentActivity() {
         seekStepSeconds: Int = 10,  // 快进/快退跨度（秒）
         initialSourceIndex: Int = 0,  // 初始源索引
         userAgent: String = "Wget/1.21.3",  // User-Agent
-        showUserAgent: Boolean = false  // 是否显示User-Agent
+        showUserAgent: Boolean = false,  // 是否显示User-Agent
+        hasCatchup: List<Boolean>? = null,  // 每个频道是否支持回放
+        catchupDays: List<Int>? = null  // 每个频道的回放天数
     ) {
         Log.d(TAG, "showPlayerFragment isDlnaMode=$isDlnaMode, bufferStrength=$bufferStrength, logos=${logos?.size ?: 0}, sourceIndex=$initialSourceIndex, isSeekable=${isSeekable?.getOrNull(index)}, progressBarMode=$progressBarMode, seekStepSeconds=$seekStepSeconds, userAgent=$userAgent, showUserAgent=$showUserAgent")
         
@@ -350,6 +354,8 @@ class MainActivity: FlutterFragmentActivity() {
         val logosArrayList = logos?.let { ArrayList(it) }
         val epgIdsArrayList = epgIds?.let { ArrayList(it) }
         val isSeekableArrayList = isSeekable?.let { ArrayList(it) }
+        val hasCatchupArrayList = hasCatchup?.let { ArrayList(it) }
+        val catchupDaysArrayList = catchupDays?.let { ArrayList(it) }
         
         playerFragment = NativePlayerFragment.newInstance(
             url,
@@ -372,7 +378,9 @@ class MainActivity: FlutterFragmentActivity() {
             seekStepSeconds,  // 传递快进/快退跨度
             initialSourceIndex,  // 传递初始源索引
             userAgent,  // 传递 User-Agent
-            showUserAgent  // 传递是否显示User-Agent
+            showUserAgent,  // 传递是否显示User-Agent
+            hasCatchupArrayList,  // 传递每个频道是否支持回放
+            catchupDaysArrayList  // 传递每个频道的回放天数
         ).apply {
             onCloseListener = {
                 runOnUiThread {
@@ -782,6 +790,68 @@ class MainActivity: FlutterFragmentActivity() {
         )
     }
     
+    /**
+     * Get full EPG program list for a channel (for the native EPG / catchup panel).
+     * Delegates to Flutter (EpgService) via MethodChannel.
+     */
+    fun requestEpgPrograms(channelIndex: Int, daysBack: Int, callback: (List<Map<String, Any?>>?) -> Unit) {
+        Log.d(TAG, "requestEpgPrograms: channelIndex=$channelIndex, daysBack=$daysBack, playerMethodChannel=${playerMethodChannel != null}")
+        if (playerMethodChannel == null) {
+            callback(null)
+            return
+        }
+        playerMethodChannel?.invokeMethod(
+            "getEpgPrograms",
+            mapOf("channelIndex" to channelIndex, "daysBack" to daysBack),
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    @Suppress("UNCHECKED_CAST")
+                    callback(result as? List<Map<String, Any?>>)
+                }
+                override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                    Log.e(TAG, "requestEpgPrograms error: $errorCode - $errorMessage")
+                    callback(null)
+                }
+                override fun notImplemented() {
+                    Log.w(TAG, "requestEpgPrograms not implemented")
+                    callback(null)
+                }
+            }
+        )
+    }
+
+    /**
+     * Get a catchup (replay) URL for a program, generated by Flutter (shared buildCatchupUrl logic).
+     */
+    fun requestCatchupUrl(channelIndex: Int, programStart: Long, programEnd: Long, callback: (String?) -> Unit) {
+        Log.d(TAG, "requestCatchupUrl: channelIndex=$channelIndex, start=$programStart, end=$programEnd, playerMethodChannel=${playerMethodChannel != null}")
+        if (playerMethodChannel == null) {
+            callback(null)
+            return
+        }
+        playerMethodChannel?.invokeMethod(
+            "generateCatchupUrl",
+            mapOf(
+                "channelIndex" to channelIndex,
+                "programStart" to programStart,
+                "programEnd" to programEnd
+            ),
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    callback(result as? String)
+                }
+                override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                    Log.e(TAG, "requestCatchupUrl error: $errorCode - $errorMessage")
+                    callback(null)
+                }
+                override fun notImplemented() {
+                    Log.w(TAG, "requestCatchupUrl not implemented")
+                    callback(null)
+                }
+            }
+        )
+    }
+
     /**
      * Toggle favorite status for a channel from native player
      */

@@ -110,9 +110,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     return _localMultiScreenMode && PlatformDetector.isDesktop;
   }
 
+  // 临时：全局按键监听，不依赖 Focus 焦点
+  bool _globalKeyHandler(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      print('GLOBAL_KEY: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
+    }
+    return false; // 不消费事件
+  }
+
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_globalKeyHandler);
     WidgetsBinding.instance.addObserver(this);
     // 保持屏幕常亮
     _enableWakelock();
@@ -626,6 +635,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
     ServiceLocator.log.d(
         'PlayerScreen: dispose() called, _usingNativePlayer=$_usingNativePlayer, _wasMultiScreenMode=$_wasMultiScreenMode');
 

@@ -27,6 +27,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.ui.PlayerView
@@ -65,6 +66,16 @@ class MultiScreenPlayerFragment : Fragment() {
         var currentSourceIndex: Int = 0  // 当前源索引
     )
     private val screenStates = Array(4) { ScreenState() }
+
+    // 分屏多路播放：优先选择软件解码器，避免电视盒子硬件解码器并发会话不足导致只有一路能出画面。
+    // 找不到软件解码器（极少见）时回退到默认列表（硬件）。
+    private val softwareDecoderSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+        val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+        val software = decoders.filter {
+            it.name.startsWith("c2.android.") || it.name.startsWith("OMX.google.")
+        }
+        if (software.isNotEmpty()) software else decoders
+    }
     
     // 重试相关常量
     private val MAX_RETRIES = 3
@@ -353,8 +364,13 @@ class MultiScreenPlayerFragment : Fragment() {
     private fun initializePlayer(index: Int) {
         Log.d(TAG, "Initializing player $index")
 
+        // 小米TV等部分电视盒子硬件解码器只支持有限的并发解码会话（通常仅1个），
+        // 分屏多路播放时多路同时用硬解会导致只有一路能出画面。
+        // 这里强制优先使用软件解码（c2.android.* / OMX.google.*），
+        // 代价是CPU占用升高、高码率可能掉帧，但能保证多路同时渲染。
         val renderersFactory = DefaultRenderersFactory(requireContext())
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setMediaCodecSelector(softwareDecoderSelector)
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(15000, 30000, 500, 1500)

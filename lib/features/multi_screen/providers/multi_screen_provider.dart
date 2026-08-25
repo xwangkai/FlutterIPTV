@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import '../../../core/models/channel.dart';
+import '../../../core/platform/platform_detector.dart';
 import '../../../core/services/service_locator.dart';
 import '../../../core/services/log_service.dart';
 import '../../settings/providers/settings_provider.dart';
@@ -411,7 +412,11 @@ class MultiScreenProvider extends ChangeNotifier {
     );
     screen.player = player;
 
-    final effectiveSoftware = useSoftwareDecoding || _decodingMode == 'software';
+    // Android TV 的 MediaCodec 硬解码器通常只支持 1-2 路并发，
+    // 分屏同时创建多个 VideoController 会争抢解码器导致频道轮流播放。
+    // 在 TV 上强制软解，避免硬件解码器冲突。
+    final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;
+    final effectiveSoftware = useSoftwareDecoding || _decodingMode == 'software' || isAndroidTV;
     String? hwdecMode;
     if (effectiveSoftware) {
       hwdecMode = 'no';

@@ -154,6 +154,32 @@ class NativePlayerFragment : Fragment() {
     private val epgPrograms = mutableListOf<EpgProgramItem>()
     private val epgDates = mutableListOf<String>() // 日期降序（今天在前）
     private val epgProgramsByDate = mutableMapOf<String, MutableList<EpgProgramItem>>()
+
+    // EPG 面板按键监听：挂在两个 RecyclerView 上。
+    // 焦点在节目/日期 item 上时，未被 item 消费的 ←→/菜单/返回会冒泡到这里，
+    // 避免依赖一路冒泡到根视图（在部分 TV 上不可靠）。
+    private val epgRecyclerKeyListener = View.OnKeyListener { _, keyCode, event ->
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE,
+                KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_MEDIA_TOP_MENU -> {
+                    closeEpgPanel()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (event.repeatCount == 0) switchEpgDate(-1)
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (event.repeatCount == 0) switchEpgDate(1)
+                    true
+                }
+                else -> false
+            }
+        } else {
+            false
+        }
+    }
     private var bufferStrength: String = "fast"
     private var progressBarMode: String = "auto" // 进度条显示模式：auto, always, never
     private var seekStepSeconds: Int = 10 // 快进/快退跨度（秒）
@@ -485,6 +511,8 @@ class NativePlayerFragment : Fragment() {
         epgFooterHint = view.findViewById(R.id.epg_footer_hint)
         epgDateList.layoutManager = LinearLayoutManager(requireContext(), RecyclerView.HORIZONTAL, false)
         epgProgramList.layoutManager = LinearLayoutManager(requireContext())
+        epgDateList.setOnKeyListener(epgRecyclerKeyListener)
+        epgProgramList.setOnKeyListener(epgRecyclerKeyListener)
 
         channelNameText.text = currentName
         updateStatus("Loading")
@@ -973,9 +1001,30 @@ class NativePlayerFragment : Fragment() {
         return true
     }
 
+    /**
+     * 安全快进/快退。
+     * 回放（catchup）流常被 ExoPlayer 识别为直播（duration=C.TIME_UNSET，为极小负数），
+     * 此时若用 coerceAtMost(duration) 会把目标钳制到 TIME_UNSET，seekTo 后从头播放。
+     * 这里改用已知的节目时长（回放）或正数上限，并在目标与当前位置相同时跳过 seek。
+     */
+    private fun safeSeekBy(deltaMs: Long) {
+        val p = player ?: return
+        val currentPos = if (p.currentPosition > 0) p.currentPosition else 0L
+        val rawDuration = p.duration
+        val upper = when {
+            isCatchupMode && currentCatchupProgram != null ->
+                (currentCatchupProgram!!.end - currentCatchupProgram!!.start).coerceAtLeast(1L)
+            rawDuration > 0 -> rawDuration
+            else -> Long.MAX_VALUE
+        }
+        val target = (currentPos + deltaMs).coerceIn(0L, upper)
+        if (target == currentPos) return
+        Log.d(TAG, "safeSeekBy: $currentPos -> $target (delta=$deltaMs)")
+        p.seekTo(target)
+    }
+
     private fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         Log.d(TAG, "handleKeyDown: keyCode=$keyCode, categoryPanelVisible=$categoryPanelVisible, epgPanelVisible=$epgPanelVisible, isDlnaMode=$isDlnaMode, progressBarHasFocus=${progressBar.hasFocus()}")
-        
         // EPG 节目单面板打开时，按键由面板专用处理接管
         if (epgPanelVisible) {
             return handleEpgPanelKeyDown(keyCode, event)
@@ -1037,14 +1086,9 @@ class NativePlayerFragment : Fragment() {
                         // 递增速度：每次重复事件增加0.1倍（最大1.2倍）
                         seekSpeedMultiplier = (seekSpeedMultiplier + 0.05f).coerceAtMost(5.2f)
                         val seekAmount = (seekStepSeconds * 1000 * seekSpeedMultiplier).toLong() // 用户设置的秒数 * 倍数
-                        
+
                         // 持续快退
-                        player?.let { p ->
-                            val currentPos = p.currentPosition
-                            val newPos = (currentPos - seekAmount).coerceAtLeast(0)
-                            p.seekTo(newPos)
-                            Log.d(TAG, "持续快退 (${String.format("%.1f", seekSpeedMultiplier)}x): ${formatTime(currentPos)} -> ${formatTime(newPos)} (-${seekAmount/1000}s)")
-                        }
+                        safeSeekBy(-seekAmount)
                         showControls()
                     }
                     return true
@@ -1074,12 +1118,7 @@ class NativePlayerFragment : Fragment() {
                         isSeekingWithLeftRight = true
                         seekSpeedMultiplier = 1.0f // 初始速度
                         // 快退
-                        player?.let { p ->
-                            val currentPos = p.currentPosition
-                            val newPos = (currentPos - seekStepSeconds * 1000).coerceAtLeast(0) // 使用用户设置的跨度
-                            p.seekTo(newPos)
-                            Log.d(TAG, "长按左键快退: ${formatTime(currentPos)} -> ${formatTime(newPos)} (-${seekStepSeconds}s)")
-                        }
+                        safeSeekBy(-seekStepSeconds * 1000L)
                         showControls()
                         return true
                     } else {
@@ -1103,15 +1142,9 @@ class NativePlayerFragment : Fragment() {
                         // 递增速度：每次重复事件增加0.1倍（最大1.2倍）
                         seekSpeedMultiplier = (seekSpeedMultiplier + 0.1f).coerceAtMost(1.2f)
                         val seekAmount = (seekStepSeconds * 1000 * seekSpeedMultiplier).toLong() // 用户设置的秒数 * 倍数
-                        
+
                         // 持续快进
-                        player?.let { p ->
-                            val currentPos = p.currentPosition
-                            val duration = p.duration
-                            val newPos = (currentPos + seekAmount).coerceAtMost(duration)
-                            p.seekTo(newPos)
-                            Log.d(TAG, "持续快进 (${String.format("%.1f", seekSpeedMultiplier)}x): ${formatTime(currentPos)} -> ${formatTime(newPos)} (+${seekAmount/1000}s)")
-                        }
+                        safeSeekBy(seekAmount)
                         showControls()
                     }
                     return true
@@ -1141,13 +1174,7 @@ class NativePlayerFragment : Fragment() {
                         isSeekingWithLeftRight = true
                         seekSpeedMultiplier = 1.0f // 初始速度
                         // 快进
-                        player?.let { p ->
-                            val currentPos = p.currentPosition
-                            val duration = p.duration
-                            val newPos = (currentPos + seekStepSeconds * 1000).coerceAtMost(duration) // 使用用户设置的跨度
-                            p.seekTo(newPos)
-                            Log.d(TAG, "长按右键快进: ${formatTime(currentPos)} -> ${formatTime(newPos)} (+${seekStepSeconds}s)")
-                        }
+                        safeSeekBy(seekStepSeconds * 1000L)
                         showControls()
                         return true
                     } else {
@@ -1340,12 +1367,7 @@ class NativePlayerFragment : Fragment() {
                         leftKeyShortPressRunnable = Runnable {
                             // 只在进度条可见时执行快退
                             if (progressContainer.visibility == View.VISIBLE) {
-                                player?.let { p ->
-                                    val currentPos = p.currentPosition
-                                    val newPos = (currentPos - seekStepSeconds * 1000).coerceAtLeast(0)
-                                    p.seekTo(newPos)
-                                    Log.d(TAG, "短按左键快退: ${formatTime(currentPos)} -> ${formatTime(newPos)} (-${seekStepSeconds}s)")
-                                }
+                                safeSeekBy(-seekStepSeconds * 1000L)
                                 showControls()
                             }
                         }
@@ -1389,13 +1411,7 @@ class NativePlayerFragment : Fragment() {
                     
                     // 只在进度条可见时执行快进
                     if (progressContainer.visibility == View.VISIBLE) {
-                        player?.let { p ->
-                            val currentPos = p.currentPosition
-                            val duration = p.duration
-                            val newPos = (currentPos + seekStepSeconds * 1000).coerceAtMost(duration)
-                            p.seekTo(newPos)
-                            Log.d(TAG, "短按右键快进: ${formatTime(currentPos)} -> ${formatTime(newPos)} (+${seekStepSeconds}s)")
-                        }
+                        safeSeekBy(seekStepSeconds * 1000L)
                         showControls()
                     }
                 }
@@ -1576,19 +1592,22 @@ class NativePlayerFragment : Fragment() {
     private fun onDateSelected(index: Int) {
         if (index < 0 || index >= epgDates.size) return
         selectedEpgDateIndex = index
+        epgDateList.adapter?.notifyDataSetChanged() // 刷新选中高亮
         updateEpgProgramList()
+        scrollDateToSelected()
     }
 
     private fun switchEpgDate(dir: Int) {
         if (epgDates.isEmpty()) return
         selectedEpgDateIndex = (selectedEpgDateIndex + dir + epgDates.size) % epgDates.size
+        epgDateList.adapter?.notifyDataSetChanged() // 刷新选中高亮
         updateEpgProgramList()
         scrollDateToSelected()
     }
 
     private fun scrollDateToSelected() {
+        // 只滚动日期行，不抢焦点（日期项不可聚焦，焦点始终在节目列表）
         epgDateList.scrollToPosition(selectedEpgDateIndex)
-        epgDateList.findViewHolderForAdapterPosition(selectedEpgDateIndex)?.itemView?.requestFocus()
     }
 
     private fun updateEpgProgramList() {
@@ -1763,12 +1782,21 @@ class NativePlayerFragment : Fragment() {
             holder.itemView.setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN) {
                     when (keyCode) {
-                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE,
+                        KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_MEDIA_TOP_MENU -> {
                             closeEpgPanel()
                             true
                         }
                         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                             onProgramSelected(item)
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            if (event.repeatCount == 0) switchEpgDate(-1)
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            if (event.repeatCount == 0) switchEpgDate(1)
                             true
                         }
                         else -> false
@@ -1782,7 +1810,7 @@ class NativePlayerFragment : Fragment() {
         override fun getItemCount() = programs.size
     }
 
-    // EPG 日期列表适配器
+    // EPG 日期列表适配器（日期项不可聚焦，←→ 在节目列表直接切换日期）
     inner class EpgDateAdapter(private val dates: List<String>) :
         RecyclerView.Adapter<EpgDateViewHolder>() {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): EpgDateViewHolder {
@@ -1795,26 +1823,6 @@ class NativePlayerFragment : Fragment() {
             holder.dateText.text = dateLabel(date)
             holder.itemView.isSelected = position == selectedEpgDateIndex
             holder.itemView.setOnClickListener { onDateSelected(position) }
-            holder.itemView.setOnFocusChangeListener { v, hasFocus ->
-                v.isSelected = hasFocus || position == selectedEpgDateIndex
-            }
-            holder.itemView.setOnKeyListener { _, keyCode, event ->
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    when (keyCode) {
-                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                            closeEpgPanel()
-                            true
-                        }
-                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                            onDateSelected(position)
-                            true
-                        }
-                        else -> false
-                    }
-                } else {
-                    false
-                }
-            }
         }
 
         override fun getItemCount() = dates.size

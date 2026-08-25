@@ -1494,7 +1494,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     // 临时调试：打印所有按键（确认后删除）
     if (event is KeyDownEvent && event is! KeyRepeatEvent) {
-      debugPrint('KEY: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
+      print('KEY: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
     }
 
     final playerProvider = context.read<PlayerProvider>();

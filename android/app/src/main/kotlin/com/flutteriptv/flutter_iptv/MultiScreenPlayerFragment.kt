@@ -20,6 +20,7 @@ import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -81,6 +82,12 @@ class MultiScreenPlayerFragment : Fragment() {
         }
     }
     
+    // 分屏播放器的统一音频属性（配合 handleAudioFocus=false，避免多实例互相抢音频焦点）
+    private val multiScreenAudioAttributes = AudioAttributes.Builder()
+        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+        .setUsage(C.USAGE_MEDIA)
+        .build()
+
     // 重试相关常量
     private val MAX_RETRIES = 3
     private val RETRY_DELAY = 2000L
@@ -395,12 +402,12 @@ class MultiScreenPlayerFragment : Fragment() {
         players[index] = ExoPlayer.Builder(requireContext(), renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
+            // 分屏多路：不参与音频焦点竞争（否则多个 ExoPlayer 互相抢音频焦点导致互相暂停）
+            .setAudioAttributes(multiScreenAudioAttributes, /* handleAudioFocus= */ false)
             .build().also { player ->
                 playerViews[index]?.player = player
                 player.playWhenReady = true
                 player.repeatMode = Player.REPEAT_MODE_OFF
-                // 分屏多路：不参与音频焦点竞争（否则多个 ExoPlayer 互相抢音频焦点导致互相暂停）
-                player.setHandleAudioFocus(false)
                 // 只有活动屏幕有声音；非活动屏幕彻底关闭音频轨道渲染，
                 // 避免多路 AudioTrack 输出竞争导致播放约1秒后卡死（音频时钟停摆）
                 val isActive = index == activeScreenIndex

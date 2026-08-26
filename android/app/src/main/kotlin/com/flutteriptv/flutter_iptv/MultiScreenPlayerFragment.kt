@@ -67,14 +67,17 @@ class MultiScreenPlayerFragment : Fragment() {
     )
     private val screenStates = Array(4) { ScreenState() }
 
-    // 分屏多路播放：优先选择软件解码器，避免电视盒子硬件解码器并发会话不足导致只有一路能出画面。
-    // 找不到软件解码器（极少见）时回退到默认列表（硬件）。
+    // 分屏多路播放：视频强制优先软件解码，避免电视盒子硬件解码器并发会话不足导致只有一路能出画面。
+    // 仅对视频生效（音频仍用默认选择，降低 CPU 占用）；找不到软件视频解码器（极少见）时回退默认列表。
     private val softwareDecoderSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
         val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
-        val software = decoders.filter {
-            it.name.startsWith("c2.android.") || it.name.startsWith("OMX.google.")
+        if (mimeType.startsWith("video/")) {
+            // softwareOnly 标记所有厂商的软件解码器（比按 c2.android.*/OMX.google.* 前缀匹配更可靠）
+            val software = decoders.filter { it.softwareOnly }
+            if (software.isNotEmpty()) software else decoders
+        } else {
+            decoders
         }
-        if (software.isNotEmpty()) software else decoders
     }
     
     // 重试相关常量

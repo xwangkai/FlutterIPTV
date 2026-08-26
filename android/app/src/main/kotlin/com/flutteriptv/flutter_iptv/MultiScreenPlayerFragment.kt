@@ -20,6 +20,7 @@ import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -376,7 +377,7 @@ class MultiScreenPlayerFragment : Fragment() {
             .setMediaCodecSelector(softwareDecoderSelector)
 
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15000, 30000, 500, 1500)
+            .setBufferDurationsMs(30000, 60000, 3000, 5000)
             .build()
 
         // 配置 HTTP 数据源和 MediaSourceFactory 支持 HLS/DASH
@@ -398,8 +399,13 @@ class MultiScreenPlayerFragment : Fragment() {
                 playerViews[index]?.player = player
                 player.playWhenReady = true
                 player.repeatMode = Player.REPEAT_MODE_OFF
-                // 只有活动屏幕有声音
-                player.volume = if (index == activeScreenIndex) getEffectiveVolume() else 0f
+                // 分屏多路：不参与音频焦点竞争（否则多个 ExoPlayer 互相抢音频焦点导致互相暂停）
+                player.setHandleAudioFocus(false)
+                // 只有活动屏幕有声音；非活动屏幕彻底关闭音频轨道渲染，
+                // 避免多路 AudioTrack 输出竞争导致播放约1秒后卡死（音频时钟停摆）
+                val isActive = index == activeScreenIndex
+                player.volume = if (isActive) getEffectiveVolume() else 0f
+                applyAudioTrackState(player, isActive)
 
                 player.addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -427,6 +433,15 @@ class MultiScreenPlayerFragment : Fragment() {
                                 updateScreenOverlay(index)
                             }
                         }
+                    }
+
+                    // 诊断：捕捉异常暂停/恢复（区分“被暂停卡住”与“缓冲卡住”）
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        NativeLogger.d(
+                            TAG,
+                            "屏幕 $index 播放: ${if (isPlaying) "PLAYING" else "PAUSED"}, " +
+                                "state=${player.playbackState}, pos=${player.currentPosition}ms"
+                        )
                     }
 
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -653,6 +668,8 @@ class MultiScreenPlayerFragment : Fragment() {
                 players[screenIndex]?.let { player ->
                     player.setMediaItem(MediaItem.fromUri(realUrl))
                     player.prepare()
+                    // 切新媒体后重新应用音频轨道状态（按当前活动状态）
+                    applyAudioTrackState(player, screenIndex == activeScreenIndex)
                 }
                 
                 val playTime = System.currentTimeMillis() - playStartTime
@@ -702,6 +719,18 @@ class MultiScreenPlayerFragment : Fragment() {
         updateScreenOverlay(screenIndex)
     }
 
+    // 控制某屏是否渲染音频：非活动屏幕关闭音频轨道（只有活动屏保留一路音频输出），
+    // 消除多路 AudioTrack 在盒子上输出竞争导致的播放卡顿；视频仍用系统时钟正常播放
+    private fun applyAudioTrackState(player: ExoPlayer?, enabled: Boolean) {
+        if (player == null) return
+        val params = player.trackSelectionParameters
+        val audioDisabled = params.disabledTrackTypes.contains(C.TRACK_TYPE_AUDIO)
+        if (audioDisabled != !enabled) return // 状态已一致
+        player.trackSelectionParameters = params.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !enabled)
+            .build()
+    }
+
     private fun setActiveScreen(index: Int) {
         if (index < 0 || index > 3) return
         if (screenStates[index].channelIndex < 0) return  // 空屏幕不能设为活动
@@ -709,13 +738,15 @@ class MultiScreenPlayerFragment : Fragment() {
 
         Log.d(TAG, "Setting active screen to $index")
 
-        // 静音旧的活动屏幕
+        // 静音旧的活动屏幕并关闭其音频渲染
         players[activeScreenIndex]?.volume = 0f
+        applyAudioTrackState(players[activeScreenIndex], false)
 
         activeScreenIndex = index
 
-        // 取消静音新的活动屏幕（使用有效音量）
+        // 取消静音新的活动屏幕（使用有效音量）并开启音频渲染
         players[activeScreenIndex]?.volume = getEffectiveVolume()
+        applyAudioTrackState(players[activeScreenIndex], true)
 
         updateAllScreenOverlays()
         

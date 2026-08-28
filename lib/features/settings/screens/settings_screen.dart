@@ -389,6 +389,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     );
                   },
                 ),
+                _buildDivider(),
+                _buildSwitchTile(
+                  context,
+                  title: 'Use Enhanced Player',
+                  subtitle: 'Replace native player with media_kit (mpv) to enable '
+                      'deinterlace, deband, FSR, and advanced scaling. '
+                      'May reduce 4K performance on low-end devices.',
+                  icon: Icons.auto_fix_high_rounded,
+                  value: settings.useEnhancedPlayer,
+                  onChanged: (value) async {
+                    await settings.setUseEnhancedPlayer(value);
+                    _showSuccess(
+                      context,
+                      value ? 'Enhanced player enabled — restart playback to apply'
+                          : 'Enhanced player disabled — using native player',
+                    );
+                  },
+                ),
               ] else ...[
                 _buildDivider(),
                 _buildSwitchTile(
@@ -423,20 +441,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
                 // ── 画质增强 ─────────────────────────────────────────────
-                // Android TV 单屏走 native player，设置仅对多屏模式生效；
-                // 其他平台（Windows / Android 手机 / 多屏）均走 media_kit，立即生效。
+                // Android TV：开启「增强播放器」后单屏也走 media_kit，画质增强全部生效；
+                // 未开启时仅多屏模式生效。其他平台始终走 media_kit，立即生效。
                 _buildDivider(),
                 _buildSwitchTile(
                   context,
                   title: 'Deband',
                   subtitle: isAndroid && isTV
-                      ? 'Reduce color banding (applies to multi-screen mode)'
+                      ? 'Reduce color banding (requires Enhanced Player)'
                       : 'Reduce color banding artifacts in gradients (deband filter)',
                   icon: Icons.gradient_rounded,
                   value: settings.videoDebandEnabled,
                   onChanged: (value) async {
                     await settings.setVideoDebandEnabled(value);
-                    if (!(PlatformDetector.isAndroid && PlatformDetector.isTV)) {
+                    // Android TV: 开启增强播放器后才需要重建 media_kit 播放器
+                    if (!(PlatformDetector.isAndroid && PlatformDetector.isTV) ||
+                        settings.useEnhancedPlayer) {
                       await _reinitMediaKitPlayer(context, settings);
                     }
                     _showSuccess(
@@ -450,7 +470,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   context,
                   title: 'Scale Algorithm',
                   subtitle: isAndroid && isTV
-                      ? '${_getScaleModeLabel(settings.videoScaleMode)} (multi-screen)'
+                      ? '${_getScaleModeLabel(settings.videoScaleMode)} (requires Enhanced Player)'
                       : _getScaleModeLabel(settings.videoScaleMode),
                   icon: Icons.zoom_out_map_rounded,
                   onTap: () => _showScaleModeDialog(context, settings),
@@ -460,13 +480,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   context,
                   title: 'FSR 1 RCAS Sharpening',
                   subtitle: isAndroid && isTV
-                      ? 'AMD FSR 1 adaptive sharpening (applies to multi-screen mode)'
+                      ? 'AMD FSR 1 adaptive sharpening (requires Enhanced Player)'
                       : 'AMD FidelityFX Super Resolution 1 adaptive sharpening (default off)',
                   icon: Icons.auto_fix_high_rounded,
                   value: settings.videoFsrEnabled,
                   onChanged: (value) async {
                     await settings.setVideoFsrEnabled(value);
-                    if (!(PlatformDetector.isAndroid && PlatformDetector.isTV)) {
+                    // Android TV: 开启增强播放器后才需要重建 media_kit 播放器
+                    if (!(PlatformDetector.isAndroid && PlatformDetector.isTV) ||
+                        settings.useEnhancedPlayer) {
                       await _reinitMediaKitPlayer(context, settings);
                     }
                     _showSuccess(

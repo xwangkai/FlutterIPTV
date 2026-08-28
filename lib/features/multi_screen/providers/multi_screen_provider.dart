@@ -2,16 +2,15 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:io' as io_fs;
 import 'dart:math' as math;
 
 import '../../../core/models/channel.dart';
 import '../../../core/platform/platform_detector.dart';
 import '../../../core/services/service_locator.dart';
 import '../../../core/services/log_service.dart';
+import '../../../core/utils/mpv_enhancement_utils.dart';
 import '../../settings/providers/settings_provider.dart';
 
 /// 单个屏幕的播放器状态
@@ -40,6 +39,9 @@ class ScreenPlayerState {
   bool deinterlaceConfigured = false;
   bool initialHwdecSet = false;
   int deinterlaceGeneration = 0; // 代际计数器，用于检测过时的 videoParams 回调
+
+  // 存储所有流订阅，确保 dispose 时统一取消，防止内存泄漏
+  final List<StreamSubscription> streamSubscriptions = [];
   
   ScreenPlayerState();
   
@@ -47,6 +49,11 @@ class ScreenPlayerState {
     // 取消去交错监听
     videoParamsSubscription?.cancel();
     videoParamsSubscription = null;
+    // 取消所有流订阅
+    for (final sub in streamSubscriptions) {
+      sub.cancel();
+    }
+    streamSubscriptions.clear();
     // 先停止播放，再释放资源
     if (player != null) {
       await player!.stop();
@@ -70,35 +77,6 @@ class MultiScreenProvider extends ChangeNotifier {
   bool _allowSoftwareFallback = true;
   String _decodingMode = 'auto';
   String _bufferStrength = 'fast';
-  String? _fsrShaderPath; // 缓存 FSR RCAS 着色器临时路径
-
-  // FSR 1.0 RCAS 着色器（Robust Contrast Adaptive Sharpening）
-  static const String _fsrRcasGlsl = r'''
-//!HOOK SCALED
-//!BIND HOOKED
-//!DESC AMD FidelityFX Super Resolution 1.0 (RCAS)
-
-#define FSR_RCAS_LIMIT 0.25
-
-vec4 hook() {
-    vec4 b = HOOKED_texOff(vec2( 0.0, -1.0));
-    vec4 d = HOOKED_texOff(vec2(-1.0,  0.0));
-    vec4 e = HOOKED_texOff(vec2( 0.0,  0.0));
-    vec4 f = HOOKED_texOff(vec2( 1.0,  0.0));
-    vec4 h = HOOKED_texOff(vec2( 0.0,  1.0));
-
-    const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
-    float bL = dot(b.rgb, lw), dL = dot(d.rgb, lw);
-    float eL = dot(e.rgb, lw), fL = dot(f.rgb, lw), hL = dot(h.rgb, lw);
-    float mn4L = min(min(bL, dL), min(fL, hL));
-    float mx4L = max(max(bL, dL), max(fL, hL));
-    float ampL = sqrt(clamp(min(mn4L, 1.0 - mx4L) / (mx4L + 1e-6), 0.0, 1.0));
-    float wL   = -clamp(ampL / 8.0, 0.0, FSR_RCAS_LIMIT) * exp2(-FSR_RCAS_LIMIT);
-    float rcpL = 1.0 / (4.0 * wL + 1.0);
-    vec3 result = clamp(((b.rgb + d.rgb + f.rgb + h.rgb) * wL + e.rgb) * rcpL, 0.0, 1.0);
-    return vec4(result, e.a);
-}
-''';
 
   // 音量设置
   double _volume = 1.0;
@@ -322,87 +300,101 @@ vec4 hook() {
     final player = screen.player;
     if (player == null) return;
 
+    // 先取消旧订阅，防止重复订阅泄漏
+    for (final sub in screen.streamSubscriptions) {
+      sub.cancel();
+    }
+    screen.streamSubscriptions.clear();
+
     // 监听播放状态
-    player.stream.playing.listen((playing) {
-      ServiceLocator.log.d('MultiScreenProvider: Screen $screenIndex playing=$playing');
-      screen.isPlaying = playing;
-      // 播放开始后确保音量正确（使用当前的 _activeScreenIndex）
-      if (playing) {
-        _applyVolumeToScreen(screenIndex);
-      }
-      notifyListeners();
-    });
+    screen.streamSubscriptions.add(
+      player.stream.playing.listen((playing) {
+        ServiceLocator.log.d('MultiScreenProvider: Screen $screenIndex playing=$playing');
+        screen.isPlaying = playing;
+        // 播放开始后确保音量正确（使用当前的 _activeScreenIndex）
+        if (playing) {
+          _applyVolumeToScreen(screenIndex);
+        }
+        notifyListeners();
+      }));
 
     // 监听视频尺寸
-    player.stream.width.listen((width) {
-      screen.videoWidth = width ?? 0;
-      notifyListeners();
-    });
+    screen.streamSubscriptions.add(
+      player.stream.width.listen((width) {
+        screen.videoWidth = width ?? 0;
+        notifyListeners();
+      }));
 
-    player.stream.height.listen((height) {
-      screen.videoHeight = height ?? 0;
-      notifyListeners();
-    });
+    screen.streamSubscriptions.add(
+      player.stream.height.listen((height) {
+        screen.videoHeight = height ?? 0;
+        notifyListeners();
+      }));
 
-    player.stream.position.listen((position) {
-      screen.position = position;
-      notifyListeners();
-    });
+    screen.streamSubscriptions.add(
+      player.stream.position.listen((position) {
+        screen.position = position;
+        notifyListeners();
+      }));
 
-    player.stream.duration.listen((duration) {
-      screen.duration = duration;
-      notifyListeners();
-    });
+    screen.streamSubscriptions.add(
+      player.stream.duration.listen((duration) {
+        screen.duration = duration;
+        notifyListeners();
+      }));
 
     // 监听 mpv 日志，过滤冗余 FFmpeg 输出
-    player.stream.log.listen((log) {
-      final message = log.text.toLowerCase();
+    screen.streamSubscriptions.add(
+      player.stream.log.listen((log) {
+        final message = log.text.toLowerCase();
 
-      // 过滤 FFmpeg 噪音日志（SEI truncated、mmco、reference frames 等）
-      if (message.contains('sei type') ||
-          message.contains('truncated at') ||
-          message.contains('mmco') ||
-          message.contains('reference frames') ||
-          message.contains('exceeds max') ||
-          message.contains('discarding one') ||
-          message.contains('deprecated pixel format') ||
-          message.contains("skip ('#ext") ||
-          (message.contains('hls @') && message.contains('skip')) ||
-          message.contains('no such filter') ||
-          message.contains('error creating filters')) {
-        return;
-      }
-
-      // 根据当前日志级别决定是否转发
-      if (ServiceLocator.log.currentLevel != LogLevel.off) {
-        ServiceLocator.log.d(
-            'MultiScreen MPV log [screen $screenIndex]: ${log.text}',
-            tag: 'MultiScreenProvider');
-      }
-    });
-
-    // 监听错误
-    player.stream.error.listen((error) async {
-      if (error.isNotEmpty) {
-        ServiceLocator.log.d('MultiScreenProvider: Screen $screenIndex error=$error');
-        if (_shouldTrySoftwareFallback(error, screen)) {
-          unawaited(_attemptSoftwareFallback(screenIndex));
+        // 过滤 FFmpeg 噪音日志（SEI truncated、mmco、reference frames 等）
+        if (message.contains('sei type') ||
+            message.contains('truncated at') ||
+            message.contains('mmco') ||
+            message.contains('reference frames') ||
+            message.contains('exceeds max') ||
+            message.contains('discarding one') ||
+            message.contains('deprecated pixel format') ||
+            message.contains("skip ('#ext") ||
+            (message.contains('hls @') && message.contains('skip')) ||
+            message.contains('no such filter') ||
+            message.contains('error creating filters')) {
           return;
         }
-        final switched =
-            await _tryNextSourceOnError(screenIndex, screen, error);
-        if (switched) return;
-        screen.error = error;
-        screen.isLoading = false;
-        notifyListeners();
-      }
-    });
+
+        // 根据当前日志级别决定是否转发
+        if (ServiceLocator.log.currentLevel != LogLevel.off) {
+          ServiceLocator.log.d(
+              'MultiScreen MPV log [screen $screenIndex]: ${log.text}',
+              tag: 'MultiScreenProvider');
+        }
+      }));
+
+    // 监听错误
+    screen.streamSubscriptions.add(
+      player.stream.error.listen((error) async {
+        if (error.isNotEmpty) {
+          ServiceLocator.log.d('MultiScreenProvider: Screen $screenIndex error=$error');
+          if (_shouldTrySoftwareFallback(error, screen)) {
+            unawaited(_attemptSoftwareFallback(screenIndex));
+            return;
+          }
+          final switched =
+              await _tryNextSourceOnError(screenIndex, screen, error);
+          if (switched) return;
+          screen.error = error;
+          screen.isLoading = false;
+          notifyListeners();
+        }
+      }));
 
     // 监听缓冲状态
-    player.stream.buffering.listen((buffering) {
-      screen.isLoading = buffering;
-      notifyListeners();
-    });
+    screen.streamSubscriptions.add(
+      player.stream.buffering.listen((buffering) {
+        screen.isLoading = buffering;
+        notifyListeners();
+      }));
   }
 
   Future<void> _createPlayerForScreen(int screenIndex, {required bool useSoftwareDecoding}) async {
@@ -492,61 +484,20 @@ vec4 hook() {
     await _applyEnhancementSettings(player);
   }
 
-  /// 安全调用 setProperty，单个失败不影响其他调用
-  /// 返回 true 表示成功，false 表示失败
+  /// 安全调用 setProperty（委托至 MpvEnhancementUtils）
   Future<bool> _safeSetProperty(
       Player player, String property, String value, String label) async {
-    try {
-      final nativePlayer = player.platform as dynamic;
-      await nativePlayer.setProperty(property, value);
-      return true;
-    } catch (e) {
-      ServiceLocator.log.d('MultiScreenProvider: 设置 $label 失败: $e');
-      return false;
-    }
+    return MpvEnhancementUtils.safeSetProperty(player, property, value, label);
   }
 
-  /// 安全读取 getProperty，失败返回 null
+  /// 安全读取 getProperty（委托至 MpvEnhancementUtils）
   Future<String?> _safeGetProperty(Player player, String property, String label) async {
-    try {
-      final nativePlayer = player.platform as dynamic;
-      return await nativePlayer.getProperty(property);
-    } catch (e) {
-      ServiceLocator.log.d('MultiScreenProvider: 读取 $label 失败: $e');
-      return null;
-    }
+    return MpvEnhancementUtils.safeGetProperty(player, property, label);
   }
 
-  /// 验证滤镜链/去交错是否真正生效（修复验证盲区）
+  /// 验证滤镜链/去交错是否真正生效（委托至 MpvEnhancementUtils）
   Future<bool> _verifyFilterChainActive(Player player, String label) async {
-    final failureSignaled = Completer<bool>();
-
-    void checkFailure(String msg) {
-      if (msg.contains('Disabling filter') ||
-          msg.contains('Impossible to convert') ||
-          msg.contains('failed to configure the filter graph') ||
-          msg.contains('no such filter') ||
-          msg.contains('error creating filters') ||
-          msg.contains('Error parsing option') ||
-          msg.contains('option not found')) {
-        if (!failureSignaled.isCompleted) failureSignaled.complete(true);
-      }
-    }
-
-    final logSub = player.stream.log.listen((log) => checkFailure(log.text));
-    final errSub = player.stream.error.listen((err) {
-      if (err.isNotEmpty) checkFailure(err);
-    });
-    final failed = await failureSignaled.future.timeout(
-      const Duration(milliseconds: 350),
-      onTimeout: () => false,
-    );
-    await logSub.cancel();
-    await errSub.cancel();
-    if (failed) {
-      ServiceLocator.log.d('MultiScreenProvider: 滤镜链验证失败($label): 检测到 mpv 滤镜配置错误');
-    }
-    return !failed;
+    return MpvEnhancementUtils.verifyFilterChainActive(player, label);
   }
 
   /// 返回用户配置的 hwdec 模式，考虑软解码设置
@@ -902,71 +853,15 @@ vec4 hook() {
     }
   }
 
-  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径。
+  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录（委托至 MpvEnhancementUtils）
   Future<String?> _ensureFsrShader() async {
-    // 缓存路径有效且文件仍存在时直接返回
-    if (_fsrShaderPath != null && await io_fs.File(_fsrShaderPath!).exists()) {
-      return _fsrShaderPath;
-    }
-    _fsrShaderPath = null; // 清除失效缓存
-    try {
-      final dir = await getTemporaryDirectory();
-      final file = io_fs.File('${dir.path}/fsr_rcas_ms.glsl');
-      await file.writeAsString(_fsrRcasGlsl, flush: true);
-      _fsrShaderPath = file.path;
-      ServiceLocator.log.d('MultiScreenProvider: FSR shader written to $_fsrShaderPath');
-      return _fsrShaderPath;
-    } catch (e) {
-      ServiceLocator.log.d('MultiScreenProvider: Failed to write FSR shader: $e');
-      return null;
-    }
+    return MpvEnhancementUtils.ensureFsrShader();
   }
 
-  /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS）。
+  /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS），委托至 MpvEnhancementUtils
   Future<void> _applyEnhancementSettings(Player player) async {
-    final settings = ServiceLocator.settings;
-    if (settings == null) return;
-
-    // Android TV 多屏强制软解，vo=libmpv，deband/FSR 对其无效
     final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;
-
-    // --- Deband （Android TV 无效，跳过）---
-    if (!isAndroidTV) {
-      final debandEnabled = settings.videoDebandEnabled;
-      if (debandEnabled) {
-        await _safeSetProperty(player, 'deband', 'yes', 'deband');
-        await _safeSetProperty(player, 'deband-iterations', '4', 'deband-iterations');
-        await _safeSetProperty(player, 'deband-threshold', '48', 'deband-threshold');
-        await _safeSetProperty(player, 'deband-range', '16', 'deband-range');
-      } else {
-        await _safeSetProperty(player, 'deband', 'no', 'deband');
-      }
-    }
-
-    // --- Scale algorithm ---
-    // Android TV 多屏强制软解，ewa_lanczos 极耗 CPU，自动降级为 spline36
-    final scaleMode = settings.videoScaleMode; // 'auto' | 'ewa_lanczos' | 'spline36'
-    final effectiveScale = (scaleMode == 'ewa_lanczos' && isAndroidTV) ? 'spline36' : scaleMode;
-    if (effectiveScale == 'ewa_lanczos') {
-      await _safeSetProperty(player, 'scale', 'ewa_lanczos', 'scale');
-    } else if (effectiveScale == 'spline36') {
-      await _safeSetProperty(player, 'scale', 'spline36', 'scale');
-    } else {
-      await _safeSetProperty(player, 'scale', 'bilinear', 'scale');
-    }
-
-    // --- FSR 1 RCAS sharpening （Android TV 无效，跳过）---
-    if (!isAndroidTV) {
-      final fsrEnabled = settings.videoFsrEnabled;
-      if (fsrEnabled) {
-        final shaderPath = await _ensureFsrShader();
-        if (shaderPath != null) {
-          await _safeSetProperty(player, 'glsl-shaders', shaderPath, 'glsl-shaders-fsr');
-        }
-      } else {
-        await _safeSetProperty(player, 'glsl-shaders', '', 'glsl-shaders-clear');
-      }
-    }
+    await MpvEnhancementUtils.applyEnhancementSettings(player, isAndroidTV: isAndroidTV);
   }
 
   bool _shouldTrySoftwareFallback(String error, ScreenPlayerState screen) {

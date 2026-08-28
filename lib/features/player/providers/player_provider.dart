@@ -5,13 +5,12 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:path_provider/path_provider.dart';
-
 import '../../../core/models/channel.dart';
 import '../../../core/platform/platform_detector.dart';
 import '../../../core/services/service_locator.dart';
 import '../../../core/services/channel_test_service.dart';
 import '../../../core/services/log_service.dart';
+import '../../../core/utils/mpv_enhancement_utils.dart';
 import '../../settings/providers/settings_provider.dart';
 
 enum PlayerState {
@@ -60,46 +59,21 @@ class PlayerProvider extends ChangeNotifier {
   bool _initialHwdecSet = false;
   int _deinterlaceGeneration = 0; // 代际计数器，用于检测过时的 videoParams 回调
   String _videoOutput = 'auto';
-  String? _fsrShaderPath; // 缓存 FSR RCAS 着色器临时路径
 
-  // FSR 1.0 RCAS 着色器（Robust Contrast Adaptive Sharpening）
-  static const String _fsrRcasGlsl = r'''
-//!HOOK SCALED
-//!BIND HOOKED
-//!DESC AMD FidelityFX Super Resolution 1.0 (RCAS)
-
-#define FSR_RCAS_LIMIT 0.25
-
-vec4 hook() {
-    vec4 b = HOOKED_texOff(vec2( 0.0, -1.0));
-    vec4 d = HOOKED_texOff(vec2(-1.0,  0.0));
-    vec4 e = HOOKED_texOff(vec2( 0.0,  0.0));
-    vec4 f = HOOKED_texOff(vec2( 1.0,  0.0));
-    vec4 h = HOOKED_texOff(vec2( 0.0,  1.0));
-
-    const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
-    float bL = dot(b.rgb, lw), dL = dot(d.rgb, lw);
-    float eL = dot(e.rgb, lw), fL = dot(f.rgb, lw), hL = dot(h.rgb, lw);
-
-    float mn4L = min(min(bL, dL), min(fL, hL));
-    float mx4L = max(max(bL, dL), max(fL, hL));
-
-    float ampL = sqrt(clamp(min(mn4L, 1.0 - mx4L) / (mx4L + 1e-6), 0.0, 1.0));
-    float wL   = -clamp(ampL / 8.0, 0.0, FSR_RCAS_LIMIT) * exp2(-FSR_RCAS_LIMIT);
-
-    float rcpL = 1.0 / (4.0 * wL + 1.0);
-    vec3 result = clamp(((b.rgb + d.rgb + f.rgb + h.rgb) * wL + e.rgb) * rcpL, 0.0, 1.0);
-    return vec4(result, e.a);
-}
-''';
+  // 存储所有流订阅，确保 dispose 时统一取消，防止内存泄漏
+  final List<StreamSubscription> _streamSubscriptions = [];
   String _vo = 'unknown';
 
   // Override duration for catchup playback
   Duration? _overrideDuration;
 
-  // On Android TV, we use native player via Activity, so don't init any Flutter player
-  // On Android phone/tablet and other platforms, use media_kit
-  bool get _useNativePlayer => Platform.isAndroid && PlatformDetector.isTV;
+  // On Android TV, default to native ExoPlayer for best 4K performance.
+  // When user enables "Enhanced Player" in settings, use media_kit (mpv) instead
+  // to unlock deinterlace (bwdif/yadif), deband, ewa_lanczos, and FSR RCAS.
+  bool get _useNativePlayer =>
+      Platform.isAndroid &&
+      PlatformDetector.isTV &&
+      !(ServiceLocator.settings?.useEnhancedPlayer ?? false);
 
   // Getters
   Player? get player => _mediaKitPlayer;
@@ -628,67 +602,22 @@ vec4 hook() {
     ServiceLocator.log.i('播放器初始化完成', tag: 'PlayerProvider');
   }
 
-  /// 安全调用 setProperty，单个失败不影响其他调用
-  /// 返回 true 表示成功，false 表示失败
+  /// 安全调用 setProperty，单个失败不影响其他调用（委托至 MpvEnhancementUtils）
   Future<bool> _safeSetProperty(String property, String value, String label) async {
-    try {
-      final nativePlayer = player?.platform as dynamic;
-      await nativePlayer.setProperty(property, value);
-      return true;
-    } catch (e) {
-      ServiceLocator.log.d('设置 $label 失败: $e', tag: 'PlayerProvider');
-      return false;
-    }
+    if (_mediaKitPlayer == null) return false;
+    return MpvEnhancementUtils.safeSetProperty(_mediaKitPlayer!, property, value, label);
   }
 
-  /// 安全读取 getProperty，失败返回 null
+  /// 安全读取 getProperty，失败返回 null（委托至 MpvEnhancementUtils）
   Future<String?> _safeGetProperty(String property, String label) async {
-    try {
-      final nativePlayer = player?.platform as dynamic;
-      return await nativePlayer.getProperty(property);
-    } catch (e) {
-      ServiceLocator.log.d('读取 $label 失败: $e', tag: 'PlayerProvider');
-      return null;
-    }
+    if (_mediaKitPlayer == null) return null;
+    return MpvEnhancementUtils.safeGetProperty(_mediaKitPlayer!, property, label);
   }
 
-  /// 验证滤镜链/去交错是否真正生效（修复验证盲区）
-  ///
-  /// mpv 设置 `vf` 或 `deinterlace` 后是异步重建滤镜链，失败时（如硬件格式
-  /// 不兼容）会输出 "Disabling filter ... because it has failed"，或通过 error
-  /// 流抛 "Error parsing option ..." 等异常。仅检查属性/只监听 log 流都可能在
-  /// 异常经 error 流抛出时漏判。因此同时监听 log 流与 error 流：两者均无失败
-  /// 信号则视为生效。
+  /// 验证滤镜链/去交错是否真正生效（委托至 MpvEnhancementUtils）
   Future<bool> _verifyFilterChainActive(String label) async {
-    final failureSignaled = Completer<bool>();
-
-    void checkFailure(String msg) {
-      if (msg.contains('Disabling filter') ||
-          msg.contains('Impossible to convert') ||
-          msg.contains('failed to configure the filter graph') ||
-          msg.contains('no such filter') ||
-          msg.contains('error creating filters') ||
-          msg.contains('Error parsing option') ||
-          msg.contains('option not found')) {
-        if (!failureSignaled.isCompleted) failureSignaled.complete(true);
-      }
-    }
-
-    final logSub = _mediaKitPlayer!.stream.log.listen((log) => checkFailure(log.text));
-    final errSub = _mediaKitPlayer!.stream.error.listen((err) {
-      if (err.isNotEmpty) checkFailure(err);
-    });
-
-    final failed = await failureSignaled.future.timeout(
-      const Duration(milliseconds: 350),
-      onTimeout: () => false, // 超时未出现失败信号 => 视为滤镜链生效
-    );
-    await logSub.cancel();
-    await errSub.cancel();
-    if (failed) {
-      ServiceLocator.log.d('滤镜链验证失败($label): 检测到 mpv 滤镜配置错误', tag: 'PlayerProvider');
-    }
-    return !failed;
+    if (_mediaKitPlayer == null) return false;
+    return MpvEnhancementUtils.verifyFilterChainActive(_mediaKitPlayer!, label);
   }
 
   /// 返回用户配置的 hwdec 模式，考虑软解码设置
@@ -1087,22 +1016,24 @@ vec4 hook() {
   void _setupMediaKitListeners() {
     ServiceLocator.log.d('设置播放器监听器', tag: 'PlayerProvider');
 
-    //_mediaKitPlayer!.stream.completed.listen((completed) {
-    //  if (completed) {
-    //    _onPlaybackCompleted?.call();
-    //  }
-    //});
+    // 先取消旧订阅，防止重复订阅泄漏
+    for (final sub in _streamSubscriptions) {
+      sub.cancel();
+    }
+    _streamSubscriptions.clear();
 
-    // 改成（TV 上 null 安全）
-    _mediaKitPlayer?.stream.completed.listen((completed) {
-      if (completed) {
-        _onPlaybackCompleted?.call();
-      }
-    });
+    _streamSubscriptions.add(
+      _mediaKitPlayer?.stream.completed.listen((completed) {
+        if (completed) {
+          _onPlaybackCompleted?.call();
+        }
+      }) ?? _emptySubscription(),
+    );
 
     // 始终激活 mpv 日志监听器，确保所有冗余日志被过滤
     // 不依赖 LogLevel 开关，因为 mpv 日志过滤对于保持输出干净至关重要
-    _mediaKitPlayer!.stream.log.listen((log) {
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.log.listen((log) {
       final message = log.text.toLowerCase();
 
       // 过滤 FFmpeg 噪音日志（SEI truncated、mmco、reference frames 等）
@@ -1152,9 +1083,10 @@ vec4 hook() {
       } else if (log.level == 'warn') {
         ServiceLocator.log.w('MPV警告: ${log.text}', tag: 'PlayerProvider');
       }
-      });
+      }));
 
-    _mediaKitPlayer!.stream.playing.listen((playing) {
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.playing.listen((playing) {
       ServiceLocator.log.d('播放状态变化: playing=$playing', tag: 'PlayerProvider');
       if (playing) {
         _state = PlayerState.playing;
@@ -1171,9 +1103,10 @@ vec4 hook() {
         _state = PlayerState.paused;
       }
       notifyListeners();
-    });
+    }));
 
-    _mediaKitPlayer!.stream.buffering.listen((buffering) {
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.buffering.listen((buffering) {
       ServiceLocator.log.d('缓冲状态: buffering=$buffering', tag: 'PlayerProvider');
       if (buffering &&
           _state != PlayerState.idle &&
@@ -1185,97 +1118,109 @@ vec4 hook() {
             : PlayerState.paused;
       }
       notifyListeners();
-    });
+    }));
 
-    _mediaKitPlayer!.stream.position.listen((pos) {
-      _position = pos;
-      notifyListeners();
-    });
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.position.listen((pos) {
+        _position = pos;
+        notifyListeners();
+      }));
 
-    _mediaKitPlayer!.stream.duration.listen((dur) {
-      _duration = dur;
-      notifyListeners();
-    });
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.duration.listen((dur) {
+        _duration = dur;
+        notifyListeners();
+      }));
 
-    _mediaKitPlayer!.stream.tracks.listen((tracks) {
-      ServiceLocator.log.d(
-          '轨道信息更新: 视频轨:${tracks.video.length}, 音频轨:${tracks.audio.length}',
-          tag: 'PlayerProvider');
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.tracks.listen((tracks) {
+        ServiceLocator.log.d(
+            '轨道信息更新: 视频轨:${tracks.video.length}, 音频轨:${tracks.audio.length}',
+            tag: 'PlayerProvider');
 
-      for (final track in tracks.video) {
-        if (track.codec != null) {
-          _videoCodec = track.codec!;
-          ServiceLocator.log.i('视频编码: ${track.codec}', tag: 'PlayerProvider');
-        }
-        if (track.fps != null) {
-          _fps = track.fps!;
-          ServiceLocator.log
-              .i('视频帧率: ${track.fps} fps', tag: 'PlayerProvider');
-        }
-        if (track.w != null && track.h != null) {
-          ServiceLocator.log
-              .i('视频分辨率: ${track.w}x${track.h}', tag: 'PlayerProvider');
-        }
-      }
-
-      for (final track in tracks.audio) {
-        if (track.codec != null) {
-          _audioCodec = track.codec!;
-          ServiceLocator.log.i('音频编码: ${track.codec}', tag: 'PlayerProvider');
-        }
-      }
-
-      notifyListeners();
-    });
-
-    _mediaKitPlayer!.stream.volume.listen((vol) {
-      _volume = vol / 100;
-      notifyListeners();
-    });
-
-    _mediaKitPlayer!.stream.error.listen((err) {
-      if (err.isNotEmpty) {
-        ServiceLocator.log.e('播放器错误: $err', tag: 'PlayerProvider');
-
-        // 分析错误类型
-        if (err.toLowerCase().contains('decode') ||
-            err.toLowerCase().contains('decoder')) {
-          ServiceLocator.log.e('>>> 解码错误: $err', tag: 'PlayerProvider');
-        } else if (err.toLowerCase().contains('render') ||
-            err.toLowerCase().contains('display')) {
-          ServiceLocator.log.e('>>> 网络错误: $err', tag: 'PlayerProvider');
-        } else if (err.toLowerCase().contains('hwdec') ||
-            err.toLowerCase().contains('hardware')) {
-          ServiceLocator.log.e('>>> 硬件加速错误: $err', tag: 'PlayerProvider');
-        } else if (err.toLowerCase().contains('codec')) {
-          ServiceLocator.log.e('>>> 解码器错误: $err', tag: 'PlayerProvider');
+        for (final track in tracks.video) {
+          if (track.codec != null) {
+            _videoCodec = track.codec!;
+            ServiceLocator.log.i('视频编码: ${track.codec}', tag: 'PlayerProvider');
+          }
+          if (track.fps != null) {
+            _fps = track.fps!;
+            ServiceLocator.log
+                .i('视频帧率: ${track.fps} fps', tag: 'PlayerProvider');
+          }
+          if (track.w != null && track.h != null) {
+            ServiceLocator.log
+                .i('视频分辨率: ${track.w}x${track.h}', tag: 'PlayerProvider');
+          }
         }
 
-        if (_shouldTrySoftwareFallback(err)) {
-          ServiceLocator.log.w('尝试软件回退', tag: 'PlayerProvider');
-          unawaited(_attemptSoftwareFallback());
-        } else {
-          _setError(err);
+        for (final track in tracks.audio) {
+          if (track.codec != null) {
+            _audioCodec = track.codec!;
+            ServiceLocator.log.i('音频编码: ${track.codec}', tag: 'PlayerProvider');
+          }
         }
-      }
-    });
 
-    _mediaKitPlayer!.stream.width.listen((width) {
-      if (width != null && width > 0) {
-        ServiceLocator.log.d('视频宽度: $width', tag: 'PlayerProvider');
-      }
-      notifyListeners();
-    });
+        notifyListeners();
+      }));
 
-    _mediaKitPlayer!.stream.height.listen((height) {
-      if (height != null && height > 0) {
-        ServiceLocator.log.d('视频高度: $height', tag: 'PlayerProvider');
-      }
-      notifyListeners();
-    });
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.volume.listen((vol) {
+        _volume = vol / 100;
+        notifyListeners();
+      }));
+
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.error.listen((err) {
+        if (err.isNotEmpty) {
+          ServiceLocator.log.e('播放器错误: $err', tag: 'PlayerProvider');
+
+          // 分析错误类型
+          if (err.toLowerCase().contains('decode') ||
+              err.toLowerCase().contains('decoder')) {
+            ServiceLocator.log.e('>>> 解码错误: $err', tag: 'PlayerProvider');
+          } else if (err.toLowerCase().contains('render') ||
+              err.toLowerCase().contains('display')) {
+            ServiceLocator.log.e('>>> 网络错误: $err', tag: 'PlayerProvider');
+          } else if (err.toLowerCase().contains('hwdec') ||
+              err.toLowerCase().contains('hardware')) {
+            ServiceLocator.log.e('>>> 硬件加速错误: $err', tag: 'PlayerProvider');
+          } else if (err.toLowerCase().contains('codec')) {
+            ServiceLocator.log.e('>>> 解码器错误: $err', tag: 'PlayerProvider');
+          }
+
+          if (_shouldTrySoftwareFallback(err)) {
+            ServiceLocator.log.w('尝试软件回退', tag: 'PlayerProvider');
+            unawaited(_attemptSoftwareFallback());
+          } else {
+            _setError(err);
+          }
+        }
+      }));
+
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.width.listen((width) {
+        if (width != null && width > 0) {
+          ServiceLocator.log.d('视频宽度: $width', tag: 'PlayerProvider');
+        }
+        notifyListeners();
+      }));
+
+    _streamSubscriptions.add(
+      _mediaKitPlayer!.stream.height.listen((height) {
+        if (height != null && height > 0) {
+          ServiceLocator.log.d('视频高度: $height', tag: 'PlayerProvider');
+        }
+        notifyListeners();
+      }));
   }
 
   Timer? _debugInfoTimer;
+
+  /// 创建一个空的流订阅，用于 null-safe 场景
+  StreamSubscription _emptySubscription() {
+    return Stream.empty().listen((_) {});
+  }
 
   void _updateDebugInfo() {
     _debugInfoTimer?.cancel();
@@ -1478,75 +1423,15 @@ vec4 hook() {
     return '$configured -> $actual';
   }
 
-  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径。
+  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径（委托至 MpvEnhancementUtils）
   Future<String?> _ensureFsrShader() async {
-    // 缓存路径有效且文件仍存在时直接返回
-    if (_fsrShaderPath != null && await File(_fsrShaderPath!).exists()) {
-      return _fsrShaderPath;
-    }
-    _fsrShaderPath = null; // 清除失效缓存
-    try {
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/fsr_rcas.glsl');
-      await file.writeAsString(_fsrRcasGlsl, flush: true);
-      _fsrShaderPath = file.path;
-      ServiceLocator.log.d('[PlayerProvider] FSR shader written to $_fsrShaderPath');
-      return _fsrShaderPath;
-    } catch (e) {
-      ServiceLocator.log.d('[PlayerProvider] Failed to write FSR shader: $e');
-      return null;
-    }
+    return MpvEnhancementUtils.ensureFsrShader();
   }
 
-  /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS）。
+  /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS），委托至 MpvEnhancementUtils
   Future<void> _applyEnhancementSettings() async {
     if (_mediaKitPlayer == null) return;
-    final settings = ServiceLocator.settings;
-    if (settings == null) return;
-
-    // Android TV 单屏强制软解（hwdec=no），vo 通常为 libmpv 或 gpu。
-    // deband 和 FSR (glsl-shaders) 需要 vo=gpu 才能生效，在 vo=libmpv 下静默不生效；
-    // 为避免误导用户（开关打开但实际无效），Android TV 上跳过 deband 和 FSR。
-    // 缩放算法 ewa_lanczos 在软解下极耗 CPU，自动降级为 spline36。
-    final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;
-
-    // --- Deband （Android TV 无效，跳过）---
-    if (!isAndroidTV) {
-      final debandEnabled = settings.videoDebandEnabled;
-      if (debandEnabled) {
-        await _safeSetProperty('deband', 'yes', 'deband');
-        await _safeSetProperty('deband-iterations', '4', 'deband-iterations');
-        await _safeSetProperty('deband-threshold', '48', 'deband-threshold');
-        await _safeSetProperty('deband-range', '16', 'deband-range');
-      } else {
-        await _safeSetProperty('deband', 'no', 'deband');
-      }
-    }
-
-    // --- Scale algorithm ---
-    // Android TV 软解时 ewa_lanczos 极耗 CPU，自动降级为 spline36
-    final scaleMode = settings.videoScaleMode; // 'auto' | 'ewa_lanczos' | 'spline36'
-    final effectiveScale = (scaleMode == 'ewa_lanczos' && isAndroidTV) ? 'spline36' : scaleMode;
-    if (effectiveScale == 'ewa_lanczos') {
-      await _safeSetProperty('scale', 'ewa_lanczos', 'scale');
-    } else if (effectiveScale == 'spline36') {
-      await _safeSetProperty('scale', 'spline36', 'scale');
-    } else {
-      await _safeSetProperty('scale', 'bilinear', 'scale');
-    }
-
-    // --- FSR 1 RCAS sharpening （Android TV 无效，跳过）---
-    if (!isAndroidTV) {
-      final fsrEnabled = settings.videoFsrEnabled;
-      if (fsrEnabled) {
-        final shaderPath = await _ensureFsrShader();
-        if (shaderPath != null) {
-          await _safeSetProperty('glsl-shaders', shaderPath, 'glsl-shaders-fsr');
-        }
-      } else {
-        await _safeSetProperty('glsl-shaders', '', 'glsl-shaders-clear');
-      }
-    }
+    await MpvEnhancementUtils.applyEnhancementSettings(_mediaKitPlayer!);
   }
 
   bool _shouldTrySoftwareFallback(String error) {
@@ -2114,6 +1999,11 @@ vec4 hook() {
     _isDisposed = true;
     _debugInfoTimer?.cancel();
     _retryTimer?.cancel();
+    _videoParamsSubscription?.cancel();
+    for (final sub in _streamSubscriptions) {
+      sub.cancel();
+    }
+    _streamSubscriptions.clear();
     _mediaKitPlayer?.dispose();
     super.dispose();
   }

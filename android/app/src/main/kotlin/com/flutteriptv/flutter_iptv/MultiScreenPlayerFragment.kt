@@ -1383,6 +1383,9 @@ class MultiScreenPlayerFragment : Fragment() {
             players[i] = null
         }
         
+        // 关闭图片加载线程池，防止线程泄漏
+        imageExecutor.shutdown()
+        
         activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
     
@@ -1398,7 +1401,15 @@ class MultiScreenPlayerFragment : Fragment() {
     // ==================== 图片加载 ====================
     
     // 使用顶部 companion object 中的静态缓存
-    private val imageExecutor = Executors.newFixedThreadPool(8)
+    // 懒初始化 + 自动重建：防止 onDestroyView 中 shutdown 后 Fragment 复用崩溃
+    private val imageExecutor: java.util.concurrent.ExecutorService
+        get() {
+            if (!::_imageExecutor.isInitialized || _imageExecutor.isShutdown) {
+                _imageExecutor = Executors.newFixedThreadPool(8)
+            }
+            return _imageExecutor
+        }
+    private lateinit var _imageExecutor: java.util.concurrent.ExecutorService
     
     private fun loadImageAsync(url: String, imageView: ImageView, defaultView: ImageView) {
         if (url.isEmpty()) {

@@ -82,6 +82,8 @@ class SettingsProvider extends ChangeNotifier {
       'video_deband_enabled'; // 去色带开关
   static const String _keyVideoFsrEnabled =
       'video_fsr_enabled'; // FSR 1 RCAS 锐化开关（默认关）
+  static const String _keyUseEnhancedPlayer =
+      'use_enhanced_player'; // Android TV 使用增强播放器（media_kit 替代原生 ExoPlayer）
   static const String _keyLogoCacheEnabled = 'logo_cache_enabled'; // 台标图片缓存开关
   static const String _keyLogoCacheDays = 'logo_cache_days'; // 台标缓存保留天数
   static const String _keyLogoCacheMaxObjects = 'logo_cache_max_objects'; // 台标最大缓存条数
@@ -146,6 +148,7 @@ class SettingsProvider extends ChangeNotifier {
   String _videoScaleMode = 'auto'; // 缩放算法默认 auto（双线性）
   bool _videoDebandEnabled = false; // 去色带默认关闭
   bool _videoFsrEnabled = false; // FSR 1 RCAS 锐化默认关闭
+  bool _useEnhancedPlayer = false; // Android TV 增强播放器默认关闭（保持原生 ExoPlayer 兼容性）
   bool _logoCacheEnabled = true; // 台标图片缓存默认开启（减少流量消耗和加载延迟）
   int _logoCacheDays = 7; // 台标缓存默认保留7天
   int _logoCacheMaxObjects = 500; // 台标最大缓存500张图片（约 10-50MB）
@@ -204,6 +207,7 @@ class SettingsProvider extends ChangeNotifier {
   String get videoScaleMode => _videoScaleMode;
   bool get videoDebandEnabled => _videoDebandEnabled;
   bool get videoFsrEnabled => _videoFsrEnabled;
+  bool get useEnhancedPlayer => _useEnhancedPlayer;
   bool get logoCacheEnabled => _logoCacheEnabled;
   int get logoCacheDays => _logoCacheDays;
   int get logoCacheMaxObjects => _logoCacheMaxObjects;
@@ -346,6 +350,7 @@ class SettingsProvider extends ChangeNotifier {
     _videoScaleMode = prefs.getString(_keyVideoScaleMode) ?? 'auto';
     _videoDebandEnabled = prefs.getBool(_keyVideoDebandEnabled) ?? false;
     _videoFsrEnabled = prefs.getBool(_keyVideoFsrEnabled) ?? false;
+    _useEnhancedPlayer = prefs.getBool(_keyUseEnhancedPlayer) ?? false;
 
     // 加载台标缓存设置
     _logoCacheEnabled = prefs.getBool(_keyLogoCacheEnabled) ?? true;
@@ -474,6 +479,7 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setString(_keyVideoScaleMode, _videoScaleMode);
     await prefs.setBool(_keyVideoDebandEnabled, _videoDebandEnabled);
     await prefs.setBool(_keyVideoFsrEnabled, _videoFsrEnabled);
+    await prefs.setBool(_keyUseEnhancedPlayer, _useEnhancedPlayer);
     await prefs.setBool(_keyLogoCacheEnabled, _logoCacheEnabled);
     await prefs.setInt(_keyLogoCacheDays, _logoCacheDays);
     await prefs.setInt(_keyLogoCacheMaxObjects, _logoCacheMaxObjects);
@@ -906,6 +912,14 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置 Android TV 增强播放器开关（media_kit 替代原生 ExoPlayer）
+  Future<void> setUseEnhancedPlayer(bool enabled) async {
+    ServiceLocator.log.d('SettingsProvider: 设置增强播放器 - $enabled');
+    _useEnhancedPlayer = enabled;
+    await _saveSettings();
+    notifyListeners();
+  }
+
   /// 设置首页是否显示收藏夹
   Future<void> setShowFavoritesOnHome(bool show) async {
     ServiceLocator.log.d('SettingsProvider: 设置首页显示收藏夹 - $show');
@@ -1052,6 +1066,7 @@ class SettingsProvider extends ChangeNotifier {
     _videoScaleMode = 'auto';
     _videoDebandEnabled = false;
     _videoFsrEnabled = false;
+    _useEnhancedPlayer = false;
     _logoCacheEnabled = true;
     _logoCacheDays = 7;
     _logoCacheMaxObjects = 500;

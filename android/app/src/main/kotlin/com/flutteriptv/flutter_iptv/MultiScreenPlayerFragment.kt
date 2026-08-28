@@ -88,7 +88,8 @@ class MultiScreenPlayerFragment : Fragment() {
     // 争抢解码器，表现为两个频道约 1 秒切换一次。
     // 当软件解码器不可用时，改为只让活动屏幕渲染视频，非活动屏幕禁用视频轨道
     // 以释放硬件解码器，避免并发竞争。
-    private var hasSoftwareVideoDecoders: Boolean = true  // 默认乐观，启动时检测
+    // 默认 false（保守），启动时通过 checkSoftwareVideoDecoders() 检测
+    private var hasSoftwareVideoDecoders: Boolean = false
     
     // 分屏播放器的统一音频属性（配合 handleAudioFocus=false，避免多实例互相抢音频焦点）
     private val multiScreenAudioAttributes = AudioAttributes.Builder()
@@ -318,7 +319,7 @@ class MultiScreenPlayerFragment : Fragment() {
             for (i in 0..3) {
                 players[i]?.volume = if (i == activeScreenIndex) getEffectiveVolume() else 0f
                 applyAudioTrackState(players[i], i == activeScreenIndex)
-                applyVideoTrackState(players[i], i == activeScreenIndex)
+                applyScreenPlaybackState(i, i == activeScreenIndex)
             }
         } else {
             // 默认在指定屏幕位置播放初始频道（参考Windows分屏逻辑）
@@ -333,7 +334,7 @@ class MultiScreenPlayerFragment : Fragment() {
                 // 确保该屏幕有声音和视频
                 players[screenIndex]?.volume = getEffectiveVolume()
                 applyAudioTrackState(players[screenIndex], true)
-                applyVideoTrackState(players[screenIndex], true)
+                applyScreenPlaybackState(screenIndex, true)
             }
         }
 
@@ -437,8 +438,8 @@ class MultiScreenPlayerFragment : Fragment() {
                 val isActive = index == activeScreenIndex
                 player.volume = if (isActive) getEffectiveVolume() else 0f
                 applyAudioTrackState(player, isActive)
-                // 没有软件视频解码器时，非活动屏幕禁用视频轨道以释放硬件解码器
-                applyVideoTrackState(player, isActive)
+                // 没有软件视频解码器时，非活动屏幕 stop() 释放硬件解码器
+                applyScreenPlaybackState(index, isActive)
 
                 player.addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -704,7 +705,7 @@ class MultiScreenPlayerFragment : Fragment() {
                     // 切新媒体后重新应用音频/视频轨道状态（按当前活动状态）
                     val isActive = screenIndex == activeScreenIndex
                     applyAudioTrackState(player, isActive)
-                    applyVideoTrackState(player, isActive)
+                    applyScreenPlaybackState(screenIndex, isActive)
                 }
                 
                 val playTime = System.currentTimeMillis() - playStartTime
@@ -766,48 +767,64 @@ class MultiScreenPlayerFragment : Fragment() {
             .build()
     }
     
-    // 控制某屏是否渲染视频：当设备没有软件视频解码器时，只让活动屏幕渲染视频，
-    // 非活动屏幕禁用视频轨道以释放硬件解码器，避免多路并发竞争导致频道来回切换。
-    private fun applyVideoTrackState(player: ExoPlayer?, enabled: Boolean) {
-        if (player == null) return
-        // 如果设备有软件解码器，不需要禁用视频轨道
-        if (hasSoftwareVideoDecoders) return
-        val params = player.trackSelectionParameters
-        val videoDisabled = params.disabledTrackTypes.contains(C.TRACK_TYPE_VIDEO)
-        if (videoDisabled != !enabled) return // 状态已一致
-        NativeLogger.d(TAG, "applyVideoTrackState: enabled=$enabled, wasDisabled=$videoDisabled")
-        player.trackSelectionParameters = params.buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !enabled)
-            .build()
+    // 控制某屏是否播放：当设备没有软件视频解码器时，非活动屏幕直接 stop()
+    // 彻底释放硬件解码器，避免多路并发竞争导致频道来回切换。
+    // stop() 比 setTrackTypeDisabled() 更可靠——后者在某些设备上不释放解码器。
+    private fun applyScreenPlaybackState(screenIndex: Int, enabled: Boolean) {
+        if (hasSoftwareVideoDecoders) return  // 设备有软件解码器，无需干预
+        
+        val player = players[screenIndex] ?: return
+        val state = screenStates[screenIndex]
+        
+        if (enabled) {
+            // 活动屏幕：如果之前被 stop() 了，需要重新 prepare + play
+            if (player.playbackState == Player.STATE_IDLE && state.channelUrl.isNotEmpty()) {
+                NativeLogger.d(TAG, "屏幕 $screenIndex 恢复播放: ${state.channelName}")
+                player.setMediaItem(MediaItem.fromUri(state.channelUrl))
+                player.prepare()
+                player.play()
+                state.isLoading = true
+                updateScreenOverlay(screenIndex)
+            } else if (!player.playWhenReady) {
+                player.play()
+            }
+        } else {
+            // 非活动屏幕：stop() 彻底释放解码器
+            if (player.playbackState != Player.STATE_IDLE) {
+                NativeLogger.d(TAG, "屏幕 $screenIndex 停止播放以释放解码器")
+                player.stop()
+                state.isLoading = false
+                updateScreenOverlay(screenIndex)
+            }
+        }
     }
     
     // 检测设备是否有可用的软件视频解码器（H.264 AVC 作为基准检测）
-    // 检查顺序：1) FFmpeg 扩展解码器  2) Android 软件 MediaCodec 解码器
+    // 检查顺序：1) FFmpeg 扩展解码器（native 库是否真正加载）  2) Android 软件 MediaCodec 解码器
     private fun checkSoftwareVideoDecoders(): Boolean {
-        // 方法1：检查 FFmpeg 扩展是否可用（反射加载 FfmpegVideoRenderer 类）
+        // 方法1：检查 FFmpeg 扩展 native 库是否真正加载成功
+        // Class.forName 只检查类是否存在，FfmpegLibrary.isAvailable() 才检查 native 库
         val ffmpegAvailable = try {
-            Class.forName("androidx.media3.exoplayer.ffmpeg.FfmpegVideoRenderer")
-            NativeLogger.i(TAG, "FFmpeg 视频解码器扩展可用")
-            true
-        } catch (e: ClassNotFoundException) {
-            NativeLogger.w(TAG, "FFmpeg 视频解码器扩展不可用: ${e.message}")
+            val libClass = Class.forName("androidx.media3.exoplayer.ffmpeg.FfmpegLibrary")
+            val isAvailable = libClass.getMethod("isAvailable").invoke(null) as Boolean
+            NativeLogger.i(TAG, "FFmpeg native 库加载状态: $isAvailable")
+            if (isAvailable) {
+                val supports = libClass.getMethod("supportsFormat", String::class.java)
+                    .invoke(null, "video/avc") as Boolean
+                NativeLogger.i(TAG, "FFmpeg 支持 H.264 解码: $supports")
+                supports
+            } else {
+                NativeLogger.w(TAG, "FFmpeg native 库未加载，无法使用软件视频解码")
+                false
+            }
+        } catch (e: Exception) {
+            NativeLogger.w(TAG, "FFmpeg 扩展不可用: ${e.message}")
             false
         }
         
         if (ffmpegAvailable) {
-            // 进一步验证：FFmpeg 是否真的支持 H.264 解码
-            val ffmpegSupportsAvc = try {
-                val supports = Class.forName("androidx.media3.exoplayer.ffmpeg.FfmpegLibrary")
-                    .getMethod("supportsFormat", String::class.java)
-                    .invoke(null, "video/avc") as Boolean
-                NativeLogger.i(TAG, "FFmpeg 支持 H.264 解码: $supports")
-                supports
-            } catch (e: Exception) {
-                NativeLogger.w(TAG, "无法检测 FFmpeg H.264 支持: ${e.message}")
-                true // 如果检测失败，乐观假设支持
-            }
-            if (ffmpegSupportsAvc) return true
-            NativeLogger.w(TAG, "FFmpeg 扩展存在但不支持 H.264 视频解码")
+            NativeLogger.i(TAG, "✅ FFmpeg 软件视频解码器可用")
+            return true
         }
         
         // 方法2：检查 Android 软件 MediaCodec 解码器
@@ -816,7 +833,13 @@ class MultiScreenPlayerFragment : Fragment() {
             val software = decoders.filter { it.softwareOnly }
             NativeLogger.i(TAG, "软件 MediaCodec 解码器检测: 总数=${decoders.size}, 软件解码器=${software.size}, " +
                 "列表=${software.joinToString { it.name }}")
-            software.isNotEmpty()
+            if (software.isNotEmpty()) {
+                NativeLogger.i(TAG, "✅ MediaCodec 软件视频解码器可用")
+                true
+            } else {
+                NativeLogger.w(TAG, "❌ 没有可用的软件视频解码器，将只渲染活动屏幕视频")
+                false
+            }
         } catch (e: Exception) {
             NativeLogger.w(TAG, "软件 MediaCodec 解码器检测异常: ${e.message}")
             false
@@ -833,14 +856,14 @@ class MultiScreenPlayerFragment : Fragment() {
         // 静音旧的活动屏幕并关闭其音频/视频渲染
         players[activeScreenIndex]?.volume = 0f
         applyAudioTrackState(players[activeScreenIndex], false)
-        applyVideoTrackState(players[activeScreenIndex], false)
+        applyScreenPlaybackState(activeScreenIndex, false)
 
         activeScreenIndex = index
 
         // 取消静音新的活动屏幕（使用有效音量）并开启音频/视频渲染
         players[activeScreenIndex]?.volume = getEffectiveVolume()
         applyAudioTrackState(players[activeScreenIndex], true)
-        applyVideoTrackState(players[activeScreenIndex], true)
+        applyScreenPlaybackState(activeScreenIndex, true)
 
         updateAllScreenOverlays()
         

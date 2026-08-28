@@ -4,7 +4,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' show Platform;
 import 'dart:io' as io_fs;
 import 'dart:math' as math;
 
@@ -928,7 +928,8 @@ vec4 hook() {
 
   /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS）。
   Future<void> _applyEnhancementSettings(Player player) async {
-    final settings = ServiceLocator.instance.get<SettingsProvider>();
+    final settings = ServiceLocator.settings;
+    if (settings == null) return;
 
     // --- Deband ---
     final debandEnabled = settings.videoDebandEnabled;

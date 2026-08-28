@@ -423,17 +423,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () => _showVideoOutputDialog(context, settings),
                 ),
               ],
-                // ── 画质增强（所有平台）──────────────────────────────────
+                // ── 画质增强 ─────────────────────────────────────────────
+                // Android TV 单屏走 native player，设置仅对多屏模式生效；
+                // 其他平台（Windows / Android 手机 / 多屏）均走 media_kit，立即生效。
                 _buildDivider(),
                 _buildSwitchTile(
                   context,
                   title: 'Deband',
-                  subtitle: 'Reduce color banding artifacts in gradients (deband filter)',
+                  subtitle: isAndroid && isTV
+                      ? 'Reduce color banding (applies to multi-screen mode)'
+                      : 'Reduce color banding artifacts in gradients (deband filter)',
                   icon: Icons.gradient_rounded,
                   value: settings.videoDebandEnabled,
                   onChanged: (value) async {
                     await settings.setVideoDebandEnabled(value);
-                    await _reinitMediaKitPlayer(context, settings);
+                    if (!(isAndroid && isTV)) {
+                      await _reinitMediaKitPlayer(context, settings);
+                    }
                     _showSuccess(
                       context,
                       value ? 'Deband enabled' : 'Deband disabled',
@@ -444,7 +450,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildSelectTile(
                   context,
                   title: 'Scale Algorithm',
-                  subtitle: _getScaleModeLabel(settings.videoScaleMode),
+                  subtitle: isAndroid && isTV
+                      ? '${_getScaleModeLabel(settings.videoScaleMode)} (multi-screen)'
+                      : _getScaleModeLabel(settings.videoScaleMode),
                   icon: Icons.zoom_out_map_rounded,
                   onTap: () => _showScaleModeDialog(context, settings),
                 ),
@@ -452,12 +460,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildSwitchTile(
                   context,
                   title: 'FSR 1 RCAS Sharpening',
-                  subtitle: 'AMD FidelityFX Super Resolution 1 adaptive sharpening (default off)',
+                  subtitle: isAndroid && isTV
+                      ? 'AMD FSR 1 adaptive sharpening (applies to multi-screen mode)'
+                      : 'AMD FidelityFX Super Resolution 1 adaptive sharpening (default off)',
                   icon: Icons.auto_fix_high_rounded,
                   value: settings.videoFsrEnabled,
                   onChanged: (value) async {
                     await settings.setVideoFsrEnabled(value);
-                    await _reinitMediaKitPlayer(context, settings);
+                    if (!(isAndroid && isTV)) {
+                      await _reinitMediaKitPlayer(context, settings);
+                    }
                     _showSuccess(
                       context,
                       value ? 'FSR RCAS sharpening enabled' : 'FSR RCAS sharpening disabled',
@@ -1643,7 +1655,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     if (value != null) {
                       await settings.setVideoScaleMode(value);
                       Navigator.pop(dialogContext);
-                      await _reinitMediaKitPlayer(context, settings);
+                      final isTVDevice = PlatformDetector.isTV;
+                      if (!(PlatformDetector.isAndroid && isTVDevice)) {
+                        await _reinitMediaKitPlayer(context, settings);
+                      }
                       _showSuccess(context, 'Scale algorithm set to: ${_getScaleModeLabel(value)}');
                     }
                   },

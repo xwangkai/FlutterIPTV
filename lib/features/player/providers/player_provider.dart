@@ -386,7 +386,8 @@ vec4 hook() {
         ServiceLocator.log.d('>>> 重试: 使用播放地址: $realUrl', tag: 'PlayerProvider');
 
         final playStartTime = DateTime.now();
-        // 代际计数器已在 _resetDeinterlaceDetection() 中递增，确保旧回调不影响新流
+        // 重试前重置代际计数器，确保旧 videoParams 回调失效
+        _resetDeinterlaceDetection();
         await _applyDeinterlaceFilter();
         await _mediaKitPlayer?.open(_createMedia(realUrl));
 
@@ -1500,7 +1501,8 @@ vec4 hook() {
   /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS）。
   Future<void> _applyEnhancementSettings() async {
     if (_mediaKitPlayer == null) return;
-    final settings = ServiceLocator.instance.get<SettingsProvider>();
+    final settings = ServiceLocator.settings;
+    if (settings == null) return;
 
     // --- Deband ---
     final debandEnabled = settings.videoDebandEnabled;
@@ -1679,7 +1681,7 @@ vec4 hook() {
     final channelToPlay = _currentChannel;
     _state = PlayerState.loading;
     notifyListeners();
-    _initMediaKitPlayer(bufferStrength: bufferStrength);
+    await _initMediaKitPlayer(bufferStrength: bufferStrength);
     if (channelToPlay != null) {
       await playChannel(channelToPlay);
     }

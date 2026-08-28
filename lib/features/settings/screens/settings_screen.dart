@@ -423,6 +423,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () => _showVideoOutputDialog(context, settings),
                 ),
               ],
+                // ── 画质增强（所有平台）──────────────────────────────────
+                _buildDivider(),
+                _buildSwitchTile(
+                  context,
+                  title: 'Deband',
+                  subtitle: 'Reduce color banding artifacts in gradients (deband filter)',
+                  icon: Icons.gradient_rounded,
+                  value: settings.videoDebandEnabled,
+                  onChanged: (value) async {
+                    await settings.setVideoDebandEnabled(value);
+                    await _reinitMediaKitPlayer(context, settings);
+                    _showSuccess(
+                      context,
+                      value ? 'Deband enabled' : 'Deband disabled',
+                    );
+                  },
+                ),
+                _buildDivider(),
+                _buildSelectTile(
+                  context,
+                  title: 'Scale Algorithm',
+                  subtitle: _getScaleModeLabel(settings.videoScaleMode),
+                  icon: Icons.zoom_out_map_rounded,
+                  onTap: () => _showScaleModeDialog(context, settings),
+                ),
+                _buildDivider(),
+                _buildSwitchTile(
+                  context,
+                  title: 'FSR 1 RCAS Sharpening',
+                  subtitle: 'AMD FidelityFX Super Resolution 1 adaptive sharpening (default off)',
+                  icon: Icons.auto_fix_high_rounded,
+                  value: settings.videoFsrEnabled,
+                  onChanged: (value) async {
+                    await settings.setVideoFsrEnabled(value);
+                    await _reinitMediaKitPlayer(context, settings);
+                    _showSuccess(
+                      context,
+                      value ? 'FSR RCAS sharpening enabled' : 'FSR RCAS sharpening disabled',
+                    );
+                  },
+                ),
                 _buildDivider(),
                 _buildSelectTile(
                   context,
@@ -1530,6 +1571,95 @@ class _SettingsScreenState extends State<SettingsScreen> {
       default:
         return strings?.mergeByNameGroup ?? 'Merge by Name + Group';
     }
+  }
+
+  String _getScaleModeLabel(String mode) {
+    switch (mode) {
+      case 'ewa_lanczos':
+        return 'EWA Lanczos (high quality)';
+      case 'spline36':
+        return 'Spline36 (balanced)';
+      case 'auto':
+      default:
+        return 'Bilinear (default)';
+    }
+  }
+
+  void _showScaleModeDialog(BuildContext context, SettingsProvider settings) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
+    final isLandscape = screenWidth > 600 && screenWidth < 900 && screenHeight < screenWidth;
+    final options = ['auto', 'ewa_lanczos', 'spline36'];
+    final descriptions = {
+      'auto': 'Default bilinear — lowest GPU cost',
+      'ewa_lanczos': 'High-quality Lanczos resampling — sharper detail, higher GPU cost',
+      'spline36': 'Spline36 resampling — good sharpness / cost trade-off',
+    };
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppTheme.getSurfaceColor(context),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(isLandscape ? 12 : 16),
+          ),
+          contentPadding: EdgeInsets.all(isLandscape ? 12 : 20),
+          titlePadding: EdgeInsets.fromLTRB(
+            isLandscape ? 16 : 24,
+            isLandscape ? 12 : 20,
+            isLandscape ? 16 : 24,
+            isLandscape ? 8 : 16,
+          ),
+          title: Text(
+            'Scale Algorithm',
+            style: TextStyle(
+              color: AppTheme.getTextPrimary(context),
+              fontSize: isLandscape ? 14 : 18,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: options.map((mode) {
+                return RadioListTile<String>(
+                  title: Text(
+                    _getScaleModeLabel(mode),
+                    style: TextStyle(
+                      color: AppTheme.getTextPrimary(context),
+                      fontSize: isLandscape ? 12 : 14,
+                    ),
+                  ),
+                  subtitle: Text(
+                    descriptions[mode] ?? '',
+                    style: TextStyle(
+                      color: AppTheme.getTextMuted(context),
+                      fontSize: isLandscape ? 9 : 11,
+                    ),
+                  ),
+                  value: mode,
+                  groupValue: settings.videoScaleMode,
+                  onChanged: (value) async {
+                    if (value != null) {
+                      await settings.setVideoScaleMode(value);
+                      Navigator.pop(dialogContext);
+                      await _reinitMediaKitPlayer(context, settings);
+                      _showSuccess(context, 'Scale algorithm set to: ${_getScaleModeLabel(value)}');
+                    }
+                  },
+                  activeColor: AppTheme.getPrimaryColor(dialogContext),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: isLandscape ? 8 : 16,
+                    vertical: isLandscape ? 0 : 4,
+                  ),
+                  visualDensity: isLandscape ? VisualDensity.compact : null,
+                );
+              }).toList(),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _showChannelMergeRuleDialog(BuildContext context, SettingsProvider settings) {

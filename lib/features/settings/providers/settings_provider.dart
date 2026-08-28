@@ -76,6 +76,12 @@ class SettingsProvider extends ChangeNotifier {
       'page_transition_animation'; // 页面切换动画：fade, slide, scale, material, cupertino, none
   static const String _keyDeinterlaceEnabled =
       'deinterlace_enabled'; // 去交错（反隔行）开启
+  static const String _keyVideoScaleMode =
+      'video_scale_mode'; // 缩放算法：auto / ewa_lanczos / spline36
+  static const String _keyVideoDebandEnabled =
+      'video_deband_enabled'; // 去色带开关
+  static const String _keyVideoFsrEnabled =
+      'video_fsr_enabled'; // FSR 1 RCAS 锐化开关（默认关）
   static const String _keyLogoCacheEnabled = 'logo_cache_enabled'; // 台标图片缓存开关
   static const String _keyLogoCacheDays = 'logo_cache_days'; // 台标缓存保留天数
   static const String _keyLogoCacheMaxObjects = 'logo_cache_max_objects'; // 台标最大缓存条数
@@ -137,6 +143,9 @@ class SettingsProvider extends ChangeNotifier {
   bool _showUserAgent = false; // 是否在播放器OSD显示User-Agent - 默认不显示
   String _pageTransitionAnimation = 'fade'; // 页面切换动画
   bool _deinterlaceEnabled = true; // 去交错（反隔行）默认开启（应对480i/576i/1080i广电录屏源）
+  String _videoScaleMode = 'auto'; // 缩放算法默认 auto（双线性）
+  bool _videoDebandEnabled = false; // 去色带默认关闭
+  bool _videoFsrEnabled = false; // FSR 1 RCAS 锐化默认关闭
   bool _logoCacheEnabled = true; // 台标图片缓存默认开启（减少流量消耗和加载延迟）
   int _logoCacheDays = 7; // 台标缓存默认保留7天
   int _logoCacheMaxObjects = 500; // 台标最大缓存500张图片（约 10-50MB）
@@ -192,6 +201,9 @@ class SettingsProvider extends ChangeNotifier {
   bool get showUserAgent => _showUserAgent;
   String get pageTransitionAnimation => _pageTransitionAnimation;
   bool get deinterlaceEnabled => _deinterlaceEnabled;
+  String get videoScaleMode => _videoScaleMode;
+  bool get videoDebandEnabled => _videoDebandEnabled;
+  bool get videoFsrEnabled => _videoFsrEnabled;
   bool get logoCacheEnabled => _logoCacheEnabled;
   int get logoCacheDays => _logoCacheDays;
   int get logoCacheMaxObjects => _logoCacheMaxObjects;
@@ -330,6 +342,11 @@ class SettingsProvider extends ChangeNotifier {
     // 加载去交错设置
     _deinterlaceEnabled = prefs.getBool(_keyDeinterlaceEnabled) ?? true;
 
+    // 加载画质增强设置
+    _videoScaleMode = prefs.getString(_keyVideoScaleMode) ?? 'auto';
+    _videoDebandEnabled = prefs.getBool(_keyVideoDebandEnabled) ?? false;
+    _videoFsrEnabled = prefs.getBool(_keyVideoFsrEnabled) ?? false;
+
     // 加载台标缓存设置
     _logoCacheEnabled = prefs.getBool(_keyLogoCacheEnabled) ?? true;
     _logoCacheDays = prefs.getInt(_keyLogoCacheDays) ?? 7;
@@ -454,6 +471,9 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setString(
         _keyPageTransitionAnimation, _pageTransitionAnimation);
     await prefs.setBool(_keyDeinterlaceEnabled, _deinterlaceEnabled);
+    await prefs.setString(_keyVideoScaleMode, _videoScaleMode);
+    await prefs.setBool(_keyVideoDebandEnabled, _videoDebandEnabled);
+    await prefs.setBool(_keyVideoFsrEnabled, _videoFsrEnabled);
     await prefs.setBool(_keyLogoCacheEnabled, _logoCacheEnabled);
     await prefs.setInt(_keyLogoCacheDays, _logoCacheDays);
     await prefs.setInt(_keyLogoCacheMaxObjects, _logoCacheMaxObjects);
@@ -858,6 +878,30 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setDeinterlaceEnabled(bool enabled) async {
     ServiceLocator.log.d('SettingsProvider: 设置去交错开关 - $enabled');
     _deinterlaceEnabled = enabled;
+    await _saveSettings();
+    notifyListeners();
+  }
+
+  /// 设置缩放算法（auto / ewa_lanczos / spline36）
+  Future<void> setVideoScaleMode(String mode) async {
+    ServiceLocator.log.d('SettingsProvider: 设置缩放算法 - $mode');
+    _videoScaleMode = mode;
+    await _saveSettings();
+    notifyListeners();
+  }
+
+  /// 设置去色带开关
+  Future<void> setVideoDebandEnabled(bool enabled) async {
+    ServiceLocator.log.d('SettingsProvider: 设置去色带开关 - $enabled');
+    _videoDebandEnabled = enabled;
+    await _saveSettings();
+    notifyListeners();
+  }
+
+  /// 设置 FSR 1 RCAS 锐化开关
+  Future<void> setVideoFsrEnabled(bool enabled) async {
+    ServiceLocator.log.d('SettingsProvider: 设置 FSR 1 RCAS 锐化 - $enabled');
+    _videoFsrEnabled = enabled;
     await _saveSettings();
     notifyListeners();
   }

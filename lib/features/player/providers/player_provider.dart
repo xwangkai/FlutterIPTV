@@ -5,6 +5,8 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:path_provider/path_provider.dart';
+
 import '../../../core/models/channel.dart';
 import '../../../core/platform/platform_detector.dart';
 import '../../../core/services/service_locator.dart';
@@ -58,6 +60,38 @@ class PlayerProvider extends ChangeNotifier {
   bool _initialHwdecSet = false;
   int _deinterlaceGeneration = 0; // 代际计数器，用于检测过时的 videoParams 回调
   String _videoOutput = 'auto';
+  String? _fsrShaderPath; // 缓存 FSR RCAS 着色器临时路径
+
+  // FSR 1.0 RCAS 着色器（Robust Contrast Adaptive Sharpening）
+  static const String _fsrRcasGlsl = r'''
+//!HOOK SCALED
+//!BIND HOOKED
+//!DESC AMD FidelityFX Super Resolution 1.0 (RCAS)
+
+#define FSR_RCAS_LIMIT 0.25
+
+vec4 hook() {
+    vec4 b = HOOKED_texOff(vec2( 0.0, -1.0));
+    vec4 d = HOOKED_texOff(vec2(-1.0,  0.0));
+    vec4 e = HOOKED_texOff(vec2( 0.0,  0.0));
+    vec4 f = HOOKED_texOff(vec2( 1.0,  0.0));
+    vec4 h = HOOKED_texOff(vec2( 0.0,  1.0));
+
+    const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
+    float bL = dot(b.rgb, lw), dL = dot(d.rgb, lw);
+    float eL = dot(e.rgb, lw), fL = dot(f.rgb, lw), hL = dot(h.rgb, lw);
+
+    float mn4L = min(min(bL, dL), min(fL, hL));
+    float mx4L = max(max(bL, dL), max(fL, hL));
+
+    float ampL = sqrt(clamp(min(mn4L, 1.0 - mx4L) / (mx4L + 1e-6), 0.0, 1.0));
+    float wL   = -clamp(ampL / 8.0, 0.0, FSR_RCAS_LIMIT) * exp2(-FSR_RCAS_LIMIT);
+
+    float rcpL = 1.0 / (4.0 * wL + 1.0);
+    vec3 result = clamp(((b.rgb + d.rgb + f.rgb + h.rgb) * wL + e.rgb) * rcpL, 0.0, 1.0);
+    return vec4(result, e.a);
+}
+''';
   String _vo = 'unknown';
 
   // Override duration for catchup playback
@@ -588,6 +622,7 @@ class PlayerProvider extends ChangeNotifier {
     _initialHwdecSet = false;
     _resetDeinterlaceDetection();
     await _applyDeinterlaceFilter();
+    await _applyEnhancementSettings();
 
     ServiceLocator.log.i('播放器初始化完成', tag: 'PlayerProvider');
   }
@@ -704,7 +739,6 @@ class PlayerProvider extends ChangeNotifier {
   /// _initialHwdecSet 仅在创建新播放器时重置，不随换台重置，避免不必要的 hwdec
   /// 设置触发 mpv 视频链初始化延迟。
   Future<void> _applyDeinterlaceFilter() async {
-    if (!Platform.isWindows) return;
     final prefs = ServiceLocator.prefs;
     final enabled = prefs.getBool('deinterlace_enabled') ?? true;
 
@@ -719,6 +753,77 @@ class PlayerProvider extends ChangeNotifier {
         'protocol-whitelist',
         'udp,rtp,rtsp,tcp,tls,data,file,http,https,crypto',
         'protocol-whitelist');
+
+    // ══════════════════════════════════════════════════════════════
+    // Android 分支：软件反交错（bwdif/yadif）
+    // ══════════════════════════════════════════════════════════════
+    if (Platform.isAndroid) {
+      if (!_initialHwdecSet) {
+        await _safeSetProperty('hwdec', 'no', 'hwdec');
+        _initialHwdecSet = true;
+      }
+      await _safeSetProperty('deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty('vf', '', 'clear_vf');
+
+      if (!enabled) {
+        ServiceLocator.log.d('反交错已禁用', tag: 'PlayerProvider');
+        return;
+      }
+
+      if (_videoParamsSubscription == null) {
+        _deinterlaceConfiguredForCurrentStream = false;
+        _videoParamsSubscription = _mediaKitPlayer?.stream.videoParams.listen((params) async {
+          final capturedGeneration = _deinterlaceGeneration;
+          if (_deinterlaceConfiguredForCurrentStream || params.w == null || params.w! <= 0) return;
+
+          final interlaced = await _safeGetProperty('video-frame-info/interlaced', 'interlaced');
+          final vfFpsStr   = await _safeGetProperty('estimated-vf-fps', 'vf-fps');
+          final vfFps      = double.tryParse(vfFpsStr ?? '') ?? 0.0;
+          final codec      = await _safeGetProperty('video-params/codec', 'codec');
+
+          if (capturedGeneration != _deinterlaceGeneration) return;
+          _deinterlaceConfiguredForCurrentStream = true;
+
+          final h = params.h ?? 0;
+          final w = params.w ?? 0;
+          final isInterlaced = interlaced == '1';
+          final is1080i = (h == 1080 && isInterlaced) ||
+                          (h == 1080 && vfFps < 31 && interlaced != '0') ||
+                          (codec == 'h264' && h == 1080 && w == 1920);
+
+          if (is1080i) {
+            const filters = [
+              'bwdif=mode=1:parity=auto',
+              'lavfi:bwdif=mode=1:parity=auto',
+              'lavfi:yadif=mode=1:parity=auto',
+            ];
+            bool applied = false;
+            for (final vf in filters) {
+              await _safeSetProperty('vf', vf, 'vf_android_deint');
+              final ok = await _verifyFilterChainActive('vf=$vf');
+              if (ok) {
+                applied = true;
+                ServiceLocator.log.i('1080i 反交错 → $vf', tag: 'PlayerProvider');
+                break;
+              }
+            }
+            if (!applied) {
+              ServiceLocator.log.w('1080i 反交错滤镜均不可用', tag: 'PlayerProvider');
+            }
+          } else {
+            await _safeSetProperty('vf', '', 'clear_vf');
+            final label = h > 0 ? '${h}p 逐行源' : '源（按逐行处理）';
+            ServiceLocator.log.i('$label，跳过反交错', tag: 'PlayerProvider');
+          }
+        });
+      }
+      return; // Android 处理完毕
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // 以下逻辑仅在 Windows 上执行（依赖 D3D11 VPP / DXVA2）
+    // ══════════════════════════════════════════════════════════════
+    if (!Platform.isWindows) return;
 
     // ═══════════════════════════════════════════════
     // 同步阶段（open() 之前）：设置解码器启动参数
@@ -1367,6 +1472,60 @@ class PlayerProvider extends ChangeNotifier {
       return configured;
     }
     return '$configured -> $actual';
+  }
+
+  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径。
+  Future<String?> _ensureFsrShader() async {
+    if (_fsrShaderPath != null) return _fsrShaderPath;
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/fsr_rcas.glsl');
+      await file.writeAsString(_fsrRcasGlsl, flush: true);
+      _fsrShaderPath = file.path;
+      LogService.instance.log('[PlayerProvider] FSR shader written to $_fsrShaderPath');
+      return _fsrShaderPath;
+    } catch (e) {
+      LogService.instance.log('[PlayerProvider] Failed to write FSR shader: $e');
+      return null;
+    }
+  }
+
+  /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS）。
+  Future<void> _applyEnhancementSettings() async {
+    if (_mediaKitPlayer == null) return;
+    final settings = ServiceLocator.instance.get<SettingsProvider>();
+
+    // --- Deband ---
+    final debandEnabled = settings.videoDebandEnabled;
+    if (debandEnabled) {
+      await _safeSetProperty('deband', 'yes', 'deband');
+      await _safeSetProperty('deband-iterations', '4', 'deband-iterations');
+      await _safeSetProperty('deband-threshold', '48', 'deband-threshold');
+      await _safeSetProperty('deband-range', '16', 'deband-range');
+    } else {
+      await _safeSetProperty('deband', 'no', 'deband');
+    }
+
+    // --- Scale algorithm ---
+    final scaleMode = settings.videoScaleMode; // 'auto' | 'ewa_lanczos' | 'spline36'
+    if (scaleMode == 'ewa_lanczos') {
+      await _safeSetProperty('scale', 'ewa_lanczos', 'scale');
+    } else if (scaleMode == 'spline36') {
+      await _safeSetProperty('scale', 'spline36', 'scale');
+    } else {
+      await _safeSetProperty('scale', 'bilinear', 'scale');
+    }
+
+    // --- FSR 1 RCAS sharpening ---
+    final fsrEnabled = settings.videoFsrEnabled;
+    if (fsrEnabled) {
+      final shaderPath = await _ensureFsrShader();
+      if (shaderPath != null) {
+        await _safeSetProperty('glsl-shaders', shaderPath, 'glsl-shaders-fsr');
+      }
+    } else {
+      await _safeSetProperty('glsl-shaders', '', 'glsl-shaders-clear');
+    }
   }
 
   bool _shouldTrySoftwareFallback(String error) {

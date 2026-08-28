@@ -437,7 +437,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: settings.videoDebandEnabled,
                   onChanged: (value) async {
                     await settings.setVideoDebandEnabled(value);
-                    if (!(isAndroid && isTV)) {
+                    if (!(PlatformDetector.isAndroid && PlatformDetector.isTV)) {
                       await _reinitMediaKitPlayer(context, settings);
                     }
                     _showSuccess(
@@ -467,7 +467,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: settings.videoFsrEnabled,
                   onChanged: (value) async {
                     await settings.setVideoFsrEnabled(value);
-                    if (!(isAndroid && isTV)) {
+                    if (!(PlatformDetector.isAndroid && PlatformDetector.isTV)) {
                       await _reinitMediaKitPlayer(context, settings);
                     }
                     _showSuccess(

@@ -258,7 +258,7 @@ vec4 hook() {
       // 如果播放器不存在，创建新的播放器
       if (screen.player == null) {
         ServiceLocator.log.d('MultiScreenProvider: Creating new player for screen $screenIndex');
-        _createPlayerForScreen(screenIndex, useSoftwareDecoding: false);
+        await _createPlayerForScreen(screenIndex, useSoftwareDecoding: false);
         // 为新播放器挂接流监听（首次创建时）
         _setupPlayerListeners(screenIndex, screen);
       }
@@ -386,7 +386,7 @@ vec4 hook() {
       if (error.isNotEmpty) {
         ServiceLocator.log.d('MultiScreenProvider: Screen $screenIndex error=$error');
         if (_shouldTrySoftwareFallback(error, screen)) {
-          _attemptSoftwareFallback(screenIndex);
+          unawaited(_attemptSoftwareFallback(screenIndex));
           return;
         }
         final switched =
@@ -585,6 +585,15 @@ vec4 hook() {
     final prefs = ServiceLocator.prefs;
     final enabled = prefs.getBool('deinterlace_enabled') ?? true;
 
+    // 公共参数（所有平台）：display-resample 同步 + framedrop + RTSP 协议白名单
+    await _safeSetProperty(player, 'video-sync', 'display-resample', 'video-sync');
+    await _safeSetProperty(player, 'framedrop', 'vo', 'framedrop');
+    await _safeSetProperty(
+        player,
+        'protocol-whitelist',
+        'udp,rtp,rtsp,tcp,tls,data,file,http,https,crypto',
+        'protocol-whitelist');
+
     // ─── Android 软件去交错分支（bwdif / yadif）───────────────────────
     if (Platform.isAndroid) {
       final screen = _screens.where((s) => s.player == player).firstOrNull;
@@ -648,19 +657,6 @@ vec4 hook() {
     }
 
     if (!Platform.isWindows) return;
-
-    // 公共参数：所有源均使用 display-resample 同步
-    await _safeSetProperty(player, 'video-sync', 'display-resample', 'video-sync');
-    await _safeSetProperty(player, 'framedrop', 'vo', 'framedrop');
-
-    // 允许 RTSP 协议：media_kit 默认 protocol-whitelist 不含 rtsp，
-    // 会导致 avformat_open_input() 失败并报 "Protocol 'rtsp' not on whitelist"
-    // 覆盖为包含 rtsp（及底层 udp/rtp/tcp）的安全白名单
-    await _safeSetProperty(
-        player,
-        'protocol-whitelist',
-        'udp,rtp,rtsp,tcp,tls,data,file,http,https,crypto',
-        'protocol-whitelist');
 
     // 查找该播放器对应的屏幕状态
     final screen = _screens.where((s) => s.player == player).firstOrNull;
@@ -988,7 +984,7 @@ vec4 hook() {
     final screen = _screens[screenIndex];
     if (screen.channel == null) return;
     screen.softwareFallbackAttempted = true;
-    _createPlayerForScreen(screenIndex, useSoftwareDecoding: true);
+    await _createPlayerForScreen(screenIndex, useSoftwareDecoding: true);
     // 回退会替换播放器，必须重新挂接流监听，否则新播放器的状态/错误无法被捕获
     _setupPlayerListeners(screenIndex, screen);
     await playChannelOnScreen(screenIndex, screen.channel!, skipHistory: true);

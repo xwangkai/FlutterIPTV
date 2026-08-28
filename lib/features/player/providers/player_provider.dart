@@ -912,7 +912,7 @@ vec4 hook() {
         // 预设规则：H.264 + 1920×1080 的直播源，中国广电通常为 1080i50
         // 即使首帧 interlaced 字段不稳定，也能正确启用去隔行
         final is1080i = (h == 1080 && isInterlaced) ||
-                        (h == 1080 && vfFps < 31 && interlaced != '0') ||
+                        (h == 1080 && vfFps < 31 && isInterlaced) ||
                         (codec == 'h264' && h == 1080 && w == 1920);
         // HDR 判定：BT.2020 色域 + (PQ 或 HLG 伽马曲线)
         final isHDR = srcPrimaries == 'bt.2020' &&

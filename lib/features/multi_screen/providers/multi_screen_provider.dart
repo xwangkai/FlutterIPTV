@@ -2,8 +2,10 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:io' as io_fs;
 import 'dart:math' as math;
 
 import '../../../core/models/channel.dart';
@@ -68,7 +70,36 @@ class MultiScreenProvider extends ChangeNotifier {
   bool _allowSoftwareFallback = true;
   String _decodingMode = 'auto';
   String _bufferStrength = 'fast';
-  
+  String? _fsrShaderPath; // 缓存 FSR RCAS 着色器临时路径
+
+  // FSR 1.0 RCAS 着色器（Robust Contrast Adaptive Sharpening）
+  static const String _fsrRcasGlsl = r'''
+//!HOOK SCALED
+//!BIND HOOKED
+//!DESC AMD FidelityFX Super Resolution 1.0 (RCAS)
+
+#define FSR_RCAS_LIMIT 0.25
+
+vec4 hook() {
+    vec4 b = HOOKED_texOff(vec2( 0.0, -1.0));
+    vec4 d = HOOKED_texOff(vec2(-1.0,  0.0));
+    vec4 e = HOOKED_texOff(vec2( 0.0,  0.0));
+    vec4 f = HOOKED_texOff(vec2( 1.0,  0.0));
+    vec4 h = HOOKED_texOff(vec2( 0.0,  1.0));
+
+    const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
+    float bL = dot(b.rgb, lw), dL = dot(d.rgb, lw);
+    float eL = dot(e.rgb, lw), fL = dot(f.rgb, lw), hL = dot(h.rgb, lw);
+    float mn4L = min(min(bL, dL), min(fL, hL));
+    float mx4L = max(max(bL, dL), max(fL, hL));
+    float ampL = sqrt(clamp(min(mn4L, 1.0 - mx4L) / (mx4L + 1e-6), 0.0, 1.0));
+    float wL   = -clamp(ampL / 8.0, 0.0, FSR_RCAS_LIMIT) * exp2(-FSR_RCAS_LIMIT);
+    float rcpL = 1.0 / (4.0 * wL + 1.0);
+    vec3 result = clamp(((b.rgb + d.rgb + f.rgb + h.rgb) * wL + e.rgb) * rcpL, 0.0, 1.0);
+    return vec4(result, e.a);
+}
+''';
+
   // 音量设置
   double _volume = 1.0;
   int _volumeBoostDb = 0;
@@ -458,6 +489,7 @@ class MultiScreenProvider extends ChangeNotifier {
     screen.videoParamsSubscription = null;
     screen.deinterlaceConfigured = false;
     await _applyDeinterlaceFilter(player);
+    await _applyEnhancementSettings(player);
   }
 
   /// 安全调用 setProperty，单个失败不影响其他调用
@@ -550,9 +582,71 @@ class MultiScreenProvider extends ChangeNotifier {
   /// 不会干扰新流的配置。initialHwdecSet 仅在创建新播放器时重置，不随换台重置，
   /// 避免不必要的 hwdec 设置触发 mpv 视频链初始化延迟。
   Future<void> _applyDeinterlaceFilter(Player player) async {
-    if (!Platform.isWindows) return;
     final prefs = ServiceLocator.prefs;
     final enabled = prefs.getBool('deinterlace_enabled') ?? true;
+
+    // ─── Android 软件去交错分支（bwdif / yadif）───────────────────────
+    if (Platform.isAndroid) {
+      final screen = _screens.where((s) => s.player == player).firstOrNull;
+      if (screen == null) return;
+      if (!screen.initialHwdecSet) {
+        await _safeSetProperty(player, 'hwdec', 'no', 'hwdec');
+        screen.initialHwdecSet = true;
+      }
+      await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty(player, 'vf', '', 'clear_vf');
+      if (!enabled) {
+        screen.videoParamsSubscription?.cancel();
+        screen.videoParamsSubscription = null;
+        return;
+      }
+      if (screen.videoParamsSubscription == null) {
+        screen.deinterlaceConfigured = false;
+        screen.videoParamsSubscription = player.stream.videoParams.listen((params) async {
+          final capturedGeneration = screen.deinterlaceGeneration;
+          if (screen.deinterlaceConfigured || params.w == null || params.w! <= 0) return;
+          final interlaced = await _safeGetProperty(player, 'video-frame-info/interlaced', 'interlaced');
+          final vfFpsStr = await _safeGetProperty(player, 'estimated-vf-fps', 'vf-fps');
+          final vfFps = double.tryParse(vfFpsStr ?? '') ?? 0;
+          final codec = await _safeGetProperty(player, 'video-params/codec', 'codec');
+          if (capturedGeneration != screen.deinterlaceGeneration) return;
+          screen.deinterlaceConfigured = true;
+          final h = params.h ?? 0;
+          final w = params.w ?? 0;
+          final isInterlaced = interlaced == '1';
+          final is1080i = (h == 1080 && isInterlaced) ||
+              (h == 1080 && vfFps < 31 && interlaced != '0') ||
+              (codec == 'h264' && h == 1080 && w == 1920);
+          if (!is1080i) {
+            ServiceLocator.log.i('MultiScreenProvider(Android): ${w}x$h 逐行源，无需去交错');
+            return;
+          }
+          // 依次尝试 bwdif → lavfi:bwdif → lavfi:yadif 软件滤镜
+          const filters = [
+            'bwdif=mode=1:parity=auto',
+            'lavfi:bwdif=mode=1:parity=auto',
+            'lavfi:yadif=mode=1:parity=auto',
+          ];
+          bool applied = false;
+          for (final vf in filters) {
+            await _safeSetProperty(player, 'vf', vf, 'vf_android_deint');
+            final ok = await _verifyFilterChainActive(player, 'vf=$vf');
+            if (ok) {
+              ServiceLocator.log.i('MultiScreenProvider(Android): 1080i 使用软件去交错 $vf');
+              applied = true;
+              break;
+            }
+            await _safeSetProperty(player, 'vf', '', 'clear_vf');
+          }
+          if (!applied) {
+            ServiceLocator.log.w('MultiScreenProvider(Android): 软件去交错滤镜均不可用，跳过');
+          }
+        });
+      }
+      return;
+    }
+
+    if (!Platform.isWindows) return;
 
     // 公共参数：所有源均使用 display-resample 同步
     await _safeSetProperty(player, 'video-sync', 'display-resample', 'video-sync');
@@ -807,6 +901,59 @@ class MultiScreenProvider extends ChangeNotifier {
           ServiceLocator.log.i('MultiScreenProvider: $label: $targetHwdec 硬解(当前$currentHwdec), 无去交错');
         }
       });
+    }
+  }
+
+  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径。
+  Future<String?> _ensureFsrShader() async {
+    if (_fsrShaderPath != null) return _fsrShaderPath;
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = io_fs.File('${dir.path}/fsr_rcas_ms.glsl');
+      await file.writeAsString(_fsrRcasGlsl, flush: true);
+      _fsrShaderPath = file.path;
+      ServiceLocator.log.d('MultiScreenProvider: FSR shader written to $_fsrShaderPath');
+      return _fsrShaderPath;
+    } catch (e) {
+      ServiceLocator.log.d('MultiScreenProvider: Failed to write FSR shader: $e');
+      return null;
+    }
+  }
+
+  /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS）。
+  Future<void> _applyEnhancementSettings(Player player) async {
+    final settings = ServiceLocator.instance.get<SettingsProvider>();
+
+    // --- Deband ---
+    final debandEnabled = settings.videoDebandEnabled;
+    if (debandEnabled) {
+      await _safeSetProperty(player, 'deband', 'yes', 'deband');
+      await _safeSetProperty(player, 'deband-iterations', '4', 'deband-iterations');
+      await _safeSetProperty(player, 'deband-threshold', '48', 'deband-threshold');
+      await _safeSetProperty(player, 'deband-range', '16', 'deband-range');
+    } else {
+      await _safeSetProperty(player, 'deband', 'no', 'deband');
+    }
+
+    // --- Scale algorithm ---
+    final scaleMode = settings.videoScaleMode; // 'auto' | 'ewa_lanczos' | 'spline36'
+    if (scaleMode == 'ewa_lanczos') {
+      await _safeSetProperty(player, 'scale', 'ewa_lanczos', 'scale');
+    } else if (scaleMode == 'spline36') {
+      await _safeSetProperty(player, 'scale', 'spline36', 'scale');
+    } else {
+      await _safeSetProperty(player, 'scale', 'bilinear', 'scale');
+    }
+
+    // --- FSR 1 RCAS sharpening ---
+    final fsrEnabled = settings.videoFsrEnabled;
+    if (fsrEnabled) {
+      final shaderPath = await _ensureFsrShader();
+      if (shaderPath != null) {
+        await _safeSetProperty(player, 'glsl-shaders', shaderPath, 'glsl-shaders-fsr');
+      }
+    } else {
+      await _safeSetProperty(player, 'glsl-shaders', '', 'glsl-shaders-clear');
     }
   }
 

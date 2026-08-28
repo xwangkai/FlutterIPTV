@@ -306,8 +306,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
                 if (settings.deinterlaceEnabled) ...[
-                  // 去交错模式下拉已移除：当前 mpv 构建不支持 vf 滤镜（yadif/bwdif 等），
-                  // 仅使用 deinterlace=yes/no 属性，无需选择模式
+                  // 去交错使用 mpv vf 滤镜（bwdif/yadif），根据视频源自动检测并应用，无需手动选择模式
                 ],
               ] else if (isAndroid && isMobile) ...[
                 _buildDivider(),
@@ -1413,7 +1412,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // _getDeinterlaceModeLabel 和 _showDeinterlaceModeDialog 已移除：
-  // 当前 mpv 构建不支持 vf 滤镜，去交错仅通过 deinterlace=yes/no 属性控制，无需模式选择
+  // 去交错现通过 mpv vf 滤镜（bwdif/yadif）自动检测视频源并应用，无需手动选择模式
 
   void _showWindowsHwdecDialog(BuildContext context, SettingsProvider settings) {
     final screenWidth = MediaQuery.of(context).size.width;

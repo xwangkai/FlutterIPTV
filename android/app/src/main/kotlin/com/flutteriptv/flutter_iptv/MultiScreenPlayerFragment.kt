@@ -82,6 +82,14 @@ class MultiScreenPlayerFragment : Fragment() {
         }
     }
     
+    // 检测设备是否真的有软件视频解码器可用。
+    // 小米TV等设备通常没有 c2.android.* / OMX.google.* 软件解码器，会回退到
+    // 硬件解码器。硬件解码器只支持 1 路并发 → 多路同时硬解时两个播放器互相
+    // 争抢解码器，表现为两个频道约 1 秒切换一次。
+    // 当软件解码器不可用时，改为只让活动屏幕渲染视频，非活动屏幕禁用视频轨道
+    // 以释放硬件解码器，避免并发竞争。
+    private var hasSoftwareVideoDecoders: Boolean = true  // 默认乐观，启动时检测
+    
     // 分屏播放器的统一音频属性（配合 handleAudioFocus=false，避免多实例互相抢音频焦点）
     private val multiScreenAudioAttributes = AudioAttributes.Builder()
         .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
@@ -306,9 +314,11 @@ class MultiScreenPlayerFragment : Fragment() {
             if (initialChannelIndex >= 0 && initialChannelIndex < channelUrls.size) {
                 playChannelOnScreen(activeScreenIndex, initialChannelIndex, initialSourceIndex)
             }
-            // 确保活动屏幕有声音
+            // 确保活动屏幕有声音和视频（非活动屏幕关闭音频和视频轨道）
             for (i in 0..3) {
                 players[i]?.volume = if (i == activeScreenIndex) getEffectiveVolume() else 0f
+                applyAudioTrackState(players[i], i == activeScreenIndex)
+                applyVideoTrackState(players[i], i == activeScreenIndex)
             }
         } else {
             // 默认在指定屏幕位置播放初始频道（参考Windows分屏逻辑）
@@ -320,8 +330,10 @@ class MultiScreenPlayerFragment : Fragment() {
                 focusedScreenIndex = screenIndex
                 // 然后播放频道（使用初始源索引）
                 playChannelOnScreen(screenIndex, initialChannelIndex, initialSourceIndex)
-                // 确保该屏幕有声音
+                // 确保该屏幕有声音和视频
                 players[screenIndex]?.volume = getEffectiveVolume()
+                applyAudioTrackState(players[screenIndex], true)
+                applyVideoTrackState(players[screenIndex], true)
             }
         }
 
@@ -374,6 +386,18 @@ class MultiScreenPlayerFragment : Fragment() {
 
     private fun initializePlayer(index: Int) {
         Log.d(TAG, "Initializing player $index")
+        
+        // 首次初始化时检测软件视频解码器是否可用
+        if (index == 0) {
+            hasSoftwareVideoDecoders = checkSoftwareVideoDecoders()
+            if (hasSoftwareVideoDecoders) {
+                NativeLogger.i(TAG, "✅ 软件视频解码器可用，所有屏幕可同时渲染视频")
+            } else {
+                NativeLogger.w(TAG, "❌ 设备没有软件视频解码器！将只让活动屏幕渲染视频，非活动屏幕仅保持音频连接")
+                NativeLogger.w(TAG, "   原因：小米TV硬件解码器只支持1路并发，多路同时硬解会互相竞争导致频道来回切换")
+                NativeLogger.w(TAG, "   切换活动屏幕时（D-Pad移动焦点）会自动切换视频渲染")
+            }
+        }
 
         // 小米TV等部分电视盒子硬件解码器只支持有限的并发解码会话（通常仅1个），
         // 分屏多路播放时多路同时用硬解会导致只有一路能出画面。
@@ -413,6 +437,8 @@ class MultiScreenPlayerFragment : Fragment() {
                 val isActive = index == activeScreenIndex
                 player.volume = if (isActive) getEffectiveVolume() else 0f
                 applyAudioTrackState(player, isActive)
+                // 没有软件视频解码器时，非活动屏幕禁用视频轨道以释放硬件解码器
+                applyVideoTrackState(player, isActive)
 
                 player.addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -675,8 +701,10 @@ class MultiScreenPlayerFragment : Fragment() {
                 players[screenIndex]?.let { player ->
                     player.setMediaItem(MediaItem.fromUri(realUrl))
                     player.prepare()
-                    // 切新媒体后重新应用音频轨道状态（按当前活动状态）
-                    applyAudioTrackState(player, screenIndex == activeScreenIndex)
+                    // 切新媒体后重新应用音频/视频轨道状态（按当前活动状态）
+                    val isActive = screenIndex == activeScreenIndex
+                    applyAudioTrackState(player, isActive)
+                    applyVideoTrackState(player, isActive)
                 }
                 
                 val playTime = System.currentTimeMillis() - playStartTime
@@ -737,6 +765,63 @@ class MultiScreenPlayerFragment : Fragment() {
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !enabled)
             .build()
     }
+    
+    // 控制某屏是否渲染视频：当设备没有软件视频解码器时，只让活动屏幕渲染视频，
+    // 非活动屏幕禁用视频轨道以释放硬件解码器，避免多路并发竞争导致频道来回切换。
+    private fun applyVideoTrackState(player: ExoPlayer?, enabled: Boolean) {
+        if (player == null) return
+        // 如果设备有软件解码器，不需要禁用视频轨道
+        if (hasSoftwareVideoDecoders) return
+        val params = player.trackSelectionParameters
+        val videoDisabled = params.disabledTrackTypes.contains(C.TRACK_TYPE_VIDEO)
+        if (videoDisabled != !enabled) return // 状态已一致
+        NativeLogger.d(TAG, "applyVideoTrackState: enabled=$enabled, wasDisabled=$videoDisabled")
+        player.trackSelectionParameters = params.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !enabled)
+            .build()
+    }
+    
+    // 检测设备是否有可用的软件视频解码器（H.264 AVC 作为基准检测）
+    // 检查顺序：1) FFmpeg 扩展解码器  2) Android 软件 MediaCodec 解码器
+    private fun checkSoftwareVideoDecoders(): Boolean {
+        // 方法1：检查 FFmpeg 扩展是否可用（反射加载 FfmpegVideoRenderer 类）
+        val ffmpegAvailable = try {
+            Class.forName("androidx.media3.exoplayer.ffmpeg.FfmpegVideoRenderer")
+            NativeLogger.i(TAG, "FFmpeg 视频解码器扩展可用")
+            true
+        } catch (e: ClassNotFoundException) {
+            NativeLogger.w(TAG, "FFmpeg 视频解码器扩展不可用: ${e.message}")
+            false
+        }
+        
+        if (ffmpegAvailable) {
+            // 进一步验证：FFmpeg 是否真的支持 H.264 解码
+            val ffmpegSupportsAvc = try {
+                val supports = Class.forName("androidx.media3.exoplayer.ffmpeg.FfmpegLibrary")
+                    .getMethod("supportsFormat", String::class.java)
+                    .invoke(null, "video/avc") as Boolean
+                NativeLogger.i(TAG, "FFmpeg 支持 H.264 解码: $supports")
+                supports
+            } catch (e: Exception) {
+                NativeLogger.w(TAG, "无法检测 FFmpeg H.264 支持: ${e.message}")
+                true // 如果检测失败，乐观假设支持
+            }
+            if (ffmpegSupportsAvc) return true
+            NativeLogger.w(TAG, "FFmpeg 扩展存在但不支持 H.264 视频解码")
+        }
+        
+        // 方法2：检查 Android 软件 MediaCodec 解码器
+        return try {
+            val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos("video/avc", false, false)
+            val software = decoders.filter { it.softwareOnly }
+            NativeLogger.i(TAG, "软件 MediaCodec 解码器检测: 总数=${decoders.size}, 软件解码器=${software.size}, " +
+                "列表=${software.joinToString { it.name }}")
+            software.isNotEmpty()
+        } catch (e: Exception) {
+            NativeLogger.w(TAG, "软件 MediaCodec 解码器检测异常: ${e.message}")
+            false
+        }
+    }
 
     private fun setActiveScreen(index: Int) {
         if (index < 0 || index > 3) return
@@ -745,15 +830,17 @@ class MultiScreenPlayerFragment : Fragment() {
 
         Log.d(TAG, "Setting active screen to $index")
 
-        // 静音旧的活动屏幕并关闭其音频渲染
+        // 静音旧的活动屏幕并关闭其音频/视频渲染
         players[activeScreenIndex]?.volume = 0f
         applyAudioTrackState(players[activeScreenIndex], false)
+        applyVideoTrackState(players[activeScreenIndex], false)
 
         activeScreenIndex = index
 
-        // 取消静音新的活动屏幕（使用有效音量）并开启音频渲染
+        // 取消静音新的活动屏幕（使用有效音量）并开启音频/视频渲染
         players[activeScreenIndex]?.volume = getEffectiveVolume()
         applyAudioTrackState(players[activeScreenIndex], true)
+        applyVideoTrackState(players[activeScreenIndex], true)
 
         updateAllScreenOverlays()
         

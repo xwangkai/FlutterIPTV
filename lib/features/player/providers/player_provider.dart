@@ -1504,36 +1504,48 @@ vec4 hook() {
     final settings = ServiceLocator.settings;
     if (settings == null) return;
 
-    // --- Deband ---
-    final debandEnabled = settings.videoDebandEnabled;
-    if (debandEnabled) {
-      await _safeSetProperty('deband', 'yes', 'deband');
-      await _safeSetProperty('deband-iterations', '4', 'deband-iterations');
-      await _safeSetProperty('deband-threshold', '48', 'deband-threshold');
-      await _safeSetProperty('deband-range', '16', 'deband-range');
-    } else {
-      await _safeSetProperty('deband', 'no', 'deband');
+    // Android TV 单屏强制软解（hwdec=no），vo 通常为 libmpv 或 gpu。
+    // deband 和 FSR (glsl-shaders) 需要 vo=gpu 才能生效，在 vo=libmpv 下静默不生效；
+    // 为避免误导用户（开关打开但实际无效），Android TV 上跳过 deband 和 FSR。
+    // 缩放算法 ewa_lanczos 在软解下极耗 CPU，自动降级为 spline36。
+    final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;
+
+    // --- Deband （Android TV 无效，跳过）---
+    if (!isAndroidTV) {
+      final debandEnabled = settings.videoDebandEnabled;
+      if (debandEnabled) {
+        await _safeSetProperty('deband', 'yes', 'deband');
+        await _safeSetProperty('deband-iterations', '4', 'deband-iterations');
+        await _safeSetProperty('deband-threshold', '48', 'deband-threshold');
+        await _safeSetProperty('deband-range', '16', 'deband-range');
+      } else {
+        await _safeSetProperty('deband', 'no', 'deband');
+      }
     }
 
     // --- Scale algorithm ---
+    // Android TV 软解时 ewa_lanczos 极耗 CPU，自动降级为 spline36
     final scaleMode = settings.videoScaleMode; // 'auto' | 'ewa_lanczos' | 'spline36'
-    if (scaleMode == 'ewa_lanczos') {
+    final effectiveScale = (scaleMode == 'ewa_lanczos' && isAndroidTV) ? 'spline36' : scaleMode;
+    if (effectiveScale == 'ewa_lanczos') {
       await _safeSetProperty('scale', 'ewa_lanczos', 'scale');
-    } else if (scaleMode == 'spline36') {
+    } else if (effectiveScale == 'spline36') {
       await _safeSetProperty('scale', 'spline36', 'scale');
     } else {
       await _safeSetProperty('scale', 'bilinear', 'scale');
     }
 
-    // --- FSR 1 RCAS sharpening ---
-    final fsrEnabled = settings.videoFsrEnabled;
-    if (fsrEnabled) {
-      final shaderPath = await _ensureFsrShader();
-      if (shaderPath != null) {
-        await _safeSetProperty('glsl-shaders', shaderPath, 'glsl-shaders-fsr');
+    // --- FSR 1 RCAS sharpening （Android TV 无效，跳过）---
+    if (!isAndroidTV) {
+      final fsrEnabled = settings.videoFsrEnabled;
+      if (fsrEnabled) {
+        final shaderPath = await _ensureFsrShader();
+        if (shaderPath != null) {
+          await _safeSetProperty('glsl-shaders', shaderPath, 'glsl-shaders-fsr');
+        }
+      } else {
+        await _safeSetProperty('glsl-shaders', '', 'glsl-shaders-clear');
       }
-    } else {
-      await _safeSetProperty('glsl-shaders', '', 'glsl-shaders-clear');
     }
   }
 

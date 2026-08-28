@@ -1253,7 +1253,7 @@ vec4 hook() {
 
         if (_shouldTrySoftwareFallback(err)) {
           ServiceLocator.log.w('尝试软件回退', tag: 'PlayerProvider');
-          _attemptSoftwareFallback();
+          unawaited(_attemptSoftwareFallback());
         } else {
           _setError(err);
         }
@@ -1490,10 +1490,10 @@ vec4 hook() {
       final file = File('${dir.path}/fsr_rcas.glsl');
       await file.writeAsString(_fsrRcasGlsl, flush: true);
       _fsrShaderPath = file.path;
-      LogService.instance.log('[PlayerProvider] FSR shader written to $_fsrShaderPath');
+      ServiceLocator.log.d('[PlayerProvider] FSR shader written to $_fsrShaderPath');
       return _fsrShaderPath;
     } catch (e) {
-      LogService.instance.log('[PlayerProvider] Failed to write FSR shader: $e');
+      ServiceLocator.log.d('[PlayerProvider] Failed to write FSR shader: $e');
       return null;
     }
   }
@@ -1547,12 +1547,12 @@ vec4 hook() {
         _retryCount < _maxRetries;
   }
 
-  void _attemptSoftwareFallback() {
+  Future<void> _attemptSoftwareFallback() async {
     if (!_allowSoftwareFallback) return;
     _retryCount++;
     final channelToPlay = _currentChannel;
-    _initMediaKitPlayer(useSoftwareDecoding: true);
-    if (channelToPlay != null) playChannel(channelToPlay);
+    await _initMediaKitPlayer(useSoftwareDecoding: true);
+    if (channelToPlay != null) await playChannel(channelToPlay);
   }
 
   // ============ Public API ============
@@ -2122,7 +2122,7 @@ vec4 hook() {
           _videoHeight == 0) {
         ServiceLocator.log
             .w('PlayerProvider: 音频帧变慢时画面卡顿，尝试软件回退', tag: 'PlayerProvider');
-        _attemptSoftwareFallback();
+        unawaited(_attemptSoftwareFallback());
       }
     });
   }

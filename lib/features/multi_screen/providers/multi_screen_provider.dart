@@ -931,20 +931,24 @@ vec4 hook() {
     final settings = ServiceLocator.settings;
     if (settings == null) return;
 
-    // --- Deband ---
-    final debandEnabled = settings.videoDebandEnabled;
-    if (debandEnabled) {
-      await _safeSetProperty(player, 'deband', 'yes', 'deband');
-      await _safeSetProperty(player, 'deband-iterations', '4', 'deband-iterations');
-      await _safeSetProperty(player, 'deband-threshold', '48', 'deband-threshold');
-      await _safeSetProperty(player, 'deband-range', '16', 'deband-range');
-    } else {
-      await _safeSetProperty(player, 'deband', 'no', 'deband');
+    // Android TV 多屏强制软解，vo=libmpv，deband/FSR 对其无效
+    final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;
+
+    // --- Deband （Android TV 无效，跳过）---
+    if (!isAndroidTV) {
+      final debandEnabled = settings.videoDebandEnabled;
+      if (debandEnabled) {
+        await _safeSetProperty(player, 'deband', 'yes', 'deband');
+        await _safeSetProperty(player, 'deband-iterations', '4', 'deband-iterations');
+        await _safeSetProperty(player, 'deband-threshold', '48', 'deband-threshold');
+        await _safeSetProperty(player, 'deband-range', '16', 'deband-range');
+      } else {
+        await _safeSetProperty(player, 'deband', 'no', 'deband');
+      }
     }
 
     // --- Scale algorithm ---
     // Android TV 多屏强制软解，ewa_lanczos 极耗 CPU，自动降级为 spline36
-    final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;
     final scaleMode = settings.videoScaleMode; // 'auto' | 'ewa_lanczos' | 'spline36'
     final effectiveScale = (scaleMode == 'ewa_lanczos' && isAndroidTV) ? 'spline36' : scaleMode;
     if (effectiveScale == 'ewa_lanczos') {
@@ -955,15 +959,17 @@ vec4 hook() {
       await _safeSetProperty(player, 'scale', 'bilinear', 'scale');
     }
 
-    // --- FSR 1 RCAS sharpening ---
-    final fsrEnabled = settings.videoFsrEnabled;
-    if (fsrEnabled) {
-      final shaderPath = await _ensureFsrShader();
-      if (shaderPath != null) {
-        await _safeSetProperty(player, 'glsl-shaders', shaderPath, 'glsl-shaders-fsr');
+    // --- FSR 1 RCAS sharpening （Android TV 无效，跳过）---
+    if (!isAndroidTV) {
+      final fsrEnabled = settings.videoFsrEnabled;
+      if (fsrEnabled) {
+        final shaderPath = await _ensureFsrShader();
+        if (shaderPath != null) {
+          await _safeSetProperty(player, 'glsl-shaders', shaderPath, 'glsl-shaders-fsr');
+        }
+      } else {
+        await _safeSetProperty(player, 'glsl-shaders', '', 'glsl-shaders-clear');
       }
-    } else {
-      await _safeSetProperty(player, 'glsl-shaders', '', 'glsl-shaders-clear');
     }
   }
 

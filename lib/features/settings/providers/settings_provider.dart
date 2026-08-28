@@ -1057,6 +1057,12 @@ class SettingsProvider extends ChangeNotifier {
     _logoCacheMaxObjects = 500;
     _webLogEnabled = false;
     _applyWebLogServer(false); // 停止网页日志服务
+    _logLevel = 'off';
+    _simpleMenu = true;
+    _showMultiScreenChannelName = false;
+    _mobileOrientation = 'portrait';
+    _showWatchHistoryOnHome = false;
+    _showFavoritesOnHome = false;
 
     await _saveSettings();
 
@@ -1070,8 +1076,7 @@ class SettingsProvider extends ChangeNotifier {
       resetLogoCacheManager();
     } catch (_) {}
 
-    // 重置日志级别为关闭（性能优化）
-    await ServiceLocator.prefs.setString('log_level', 'off');
+    // 应用日志级别变更（运行时生效）
     await ServiceLocator.log.setLogLevel(LogLevel.off);
 
     notifyListeners();

@@ -614,8 +614,9 @@ vec4 hook() {
           final h = params.h ?? 0;
           final w = params.w ?? 0;
           final isInterlaced = interlaced == '1';
+          // 使用 isInterlaced 避免 null 读取失败时误判
           final is1080i = (h == 1080 && isInterlaced) ||
-              (h == 1080 && vfFps < 31 && interlaced != '0') ||
+              (h == 1080 && vfFps < 31 && isInterlaced) ||
               (codec == 'h264' && h == 1080 && w == 1920);
           if (!is1080i) {
             ServiceLocator.log.i('MultiScreenProvider(Android): ${w}x$h 逐行源，无需去交错');
@@ -746,8 +747,9 @@ vec4 hook() {
         // 1080i 判定：标准检测 + 帧率兜底 + 预设规则
         // 预设规则：H.264 + 1920×1080 的直播源，中国广电通常为 1080i50
         // 即使首帧 interlaced 字段不稳定，也能正确启用去隔行
+        // 使用 isInterlaced 避免 null 读取失败时误判
         final is1080i = (h == 1080 && isInterlaced) ||
-                        (h == 1080 && vfFps < 31 && interlaced != '0') ||
+                        (h == 1080 && vfFps < 31 && isInterlaced) ||
                         (codec == 'h264' && h == 1080 && w == 1920);
         // HDR 判定：BT.2020 色域 + (PQ 或 HLG 伽马曲线)
         final isHDR = srcPrimaries == 'bt.2020' &&
@@ -906,7 +908,11 @@ vec4 hook() {
 
   /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径。
   Future<String?> _ensureFsrShader() async {
-    if (_fsrShaderPath != null) return _fsrShaderPath;
+    // 缓存路径有效且文件仍存在时直接返回
+    if (_fsrShaderPath != null && await io_fs.File(_fsrShaderPath!).exists()) {
+      return _fsrShaderPath;
+    }
+    _fsrShaderPath = null; // 清除失效缓存
     try {
       final dir = await getTemporaryDirectory();
       final file = io_fs.File('${dir.path}/fsr_rcas_ms.glsl');
@@ -936,10 +942,13 @@ vec4 hook() {
     }
 
     // --- Scale algorithm ---
+    // Android TV 多屏强制软解，ewa_lanczos 极耗 CPU，自动降级为 spline36
+    final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;
     final scaleMode = settings.videoScaleMode; // 'auto' | 'ewa_lanczos' | 'spline36'
-    if (scaleMode == 'ewa_lanczos') {
+    final effectiveScale = (scaleMode == 'ewa_lanczos' && isAndroidTV) ? 'spline36' : scaleMode;
+    if (effectiveScale == 'ewa_lanczos') {
       await _safeSetProperty(player, 'scale', 'ewa_lanczos', 'scale');
-    } else if (scaleMode == 'spline36') {
+    } else if (effectiveScale == 'spline36') {
       await _safeSetProperty(player, 'scale', 'spline36', 'scale');
     } else {
       await _safeSetProperty(player, 'scale', 'bilinear', 'scale');

@@ -787,8 +787,9 @@ vec4 hook() {
           final h = params.h ?? 0;
           final w = params.w ?? 0;
           final isInterlaced = interlaced == '1';
+          // interlaced != '0' 改为 isInterlaced，避免属性读取失败(null)时误判为隔行
           final is1080i = (h == 1080 && isInterlaced) ||
-                          (h == 1080 && vfFps < 31 && interlaced != '0') ||
+                          (h == 1080 && vfFps < 31 && isInterlaced) ||
                           (codec == 'h264' && h == 1080 && w == 1920);
 
           if (is1080i) {
@@ -806,6 +807,8 @@ vec4 hook() {
                 ServiceLocator.log.i('1080i 反交错 → $vf', tag: 'PlayerProvider');
                 break;
               }
+              // 当前滤镜不可用，清除残留状态再尝试下一个
+              await _safeSetProperty('vf', '', 'clear_vf');
             }
             if (!applied) {
               ServiceLocator.log.w('1080i 反交错滤镜均不可用', tag: 'PlayerProvider');
@@ -1476,7 +1479,11 @@ vec4 hook() {
 
   /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径。
   Future<String?> _ensureFsrShader() async {
-    if (_fsrShaderPath != null) return _fsrShaderPath;
+    // 缓存路径有效且文件仍存在时直接返回
+    if (_fsrShaderPath != null && await File(_fsrShaderPath!).exists()) {
+      return _fsrShaderPath;
+    }
+    _fsrShaderPath = null; // 清除失效缓存
     try {
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/fsr_rcas.glsl');
@@ -2049,7 +2056,8 @@ vec4 hook() {
             .d('>>> 切换源: 使用播放地址: $realUrl', tag: 'PlayerProvider');
 
         final playStartTime = DateTime.now();
-        // 代际计数器已在 _resetDeinterlaceDetection() 中递增，确保旧回调不影响新流
+        // 切源前重置代际计数器，确保旧 videoParams 回调失效
+        _resetDeinterlaceDetection();
         await _applyDeinterlaceFilter();
         await _mediaKitPlayer?.open(_createMedia(realUrl));
 

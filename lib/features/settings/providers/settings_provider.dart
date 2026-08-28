@@ -1049,6 +1049,9 @@ class SettingsProvider extends ChangeNotifier {
     _showUserAgent = false; // 重置显示User-Agent开关为关闭
     _pageTransitionAnimation = 'fade';
     _deinterlaceEnabled = true;
+    _videoScaleMode = 'auto';
+    _videoDebandEnabled = false;
+    _videoFsrEnabled = false;
     _logoCacheEnabled = true;
     _logoCacheDays = 7;
     _logoCacheMaxObjects = 500;

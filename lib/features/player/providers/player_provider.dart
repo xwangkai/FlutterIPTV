@@ -998,6 +998,7 @@ class PlayerProvider extends ChangeNotifier {
           final label = h > 0 ? '${h}p 逐行源' : '源（默认按逐行处理）';
           ServiceLocator.log.i('$label: $targetHwdec 硬解(当前$currentHwdec), 无去交错', tag: 'PlayerProvider');
         }
+        } // end if (!_deinterlaceConfiguredForCurrentStream)
       });
     }
   }

@@ -1066,40 +1066,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ro
 
     // Android TV 也使用 Flutter 分屏（media_kit/mpv 软件解码），
     // 因为原生 ExoPlayer 多屏在小米TV等设备上存在硬件解码器并发竞争
-    // （只支持1路硬解），导致两个频道约1秒来回切换。
-    // Flutter 分屏使用 libmpv 独立软件解码，每个屏幕互不干扰。
-    if (false) { // 原: PlatformDetector.isAndroid — 保留原生代码以备将来使用
-      ServiceLocator.log.d('使用 Android TV 原生分屏', tag: 'HomeScreen');
-      final urls = channels.map((c) => c.url).toList();
-      final names = channels.map((c) => c.name).toList();
-      final groups = channels.map((c) => c.groupName ?? '').toList();
-      final sources = channels.map((c) => c.sources).toList();
-      final logos = channels.map((c) => c.logoUrl ?? '').toList();
-
-      await NativePlayerChannel.launchMultiScreen(
-        urls: urls,
-        names: names,
-        groups: groups,
-        sources: sources,
-        logos: logos,
-        initialChannelIndex: initialChannelIndex,
-        volumeBoostDb: settingsProvider.volumeBoost,
-        defaultScreenPosition: settingsProvider.defaultScreenPosition,
-        restoreActiveIndex: activeIndex,
-        restoreScreenChannels: restoreScreenChannels,
-        showChannelName: settingsProvider.showMultiScreenChannelName,
-        userAgent: settingsProvider.userAgent,
-        onClosed: () {
-          ServiceLocator.log.i('原生分屏播放器关闭，刷新观看记录', tag: 'HomeScreen');
-          // TV端原生分屏播放器关闭后，刷新观看记录
-          _refreshWatchHistory();
-        },
-      );
-      ServiceLocator.log.i('原生分屏播放器启动成功', tag: 'HomeScreen');
-    } else {
-      // Windows/其他平台使用 Flutter 分屏
-      ServiceLocator.log.d('使用 Flutter 分屏', tag: 'HomeScreen');
-      if (!mounted) return;
+    ServiceLocator.log.d('使用 Flutter 分屏', tag: 'HomeScreen');
+    if (!mounted) return;
 
       // 预先设置 MultiScreenProvider 的频道状态
       final multiScreenProvider = context.read<MultiScreenProvider>();
@@ -1161,7 +1129,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ro
           },
         );
       }
-    }
   }
 
   Widget _buildHeaderButton(

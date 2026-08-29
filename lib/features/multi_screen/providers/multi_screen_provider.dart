@@ -852,11 +852,6 @@ class MultiScreenProvider extends ChangeNotifier {
     }
   }
 
-  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录（委托至 MpvEnhancementUtils）
-  Future<String?> _ensureFsrShader() async {
-    return MpvEnhancementUtils.ensureFsrShader();
-  }
-
   /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS），委托至 MpvEnhancementUtils
   Future<void> _applyEnhancementSettings(Player player) async {
     final isAndroidTV = Platform.isAndroid && PlatformDetector.isTV;

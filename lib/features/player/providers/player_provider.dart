@@ -1215,7 +1215,7 @@ class PlayerProvider extends ChangeNotifier {
 
   /// 创建一个空的流订阅，用于 null-safe 场景
   StreamSubscription _emptySubscription() {
-    return Stream.empty().listen((_) {});
+    return const Stream.empty().listen((_) {});
   }
 
   void _updateDebugInfo() {
@@ -1417,11 +1417,6 @@ class PlayerProvider extends ChangeNotifier {
       return configured;
     }
     return '$configured -> $actual';
-  }
-
-  /// 确保 FSR RCAS GLSL 着色器文件已写入临时目录，返回其路径（委托至 MpvEnhancementUtils）
-  Future<String?> _ensureFsrShader() async {
-    return MpvEnhancementUtils.ensureFsrShader();
   }
 
   /// 根据设置项应用画质增强（deband、缩放算法、FSR RCAS），委托至 MpvEnhancementUtils

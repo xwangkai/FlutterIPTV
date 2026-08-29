@@ -4,7 +4,6 @@ import 'package:media_kit/media_kit.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../services/service_locator.dart';
-import '../../features/settings/providers/settings_provider.dart';
 
 /// 共享的 mpv 画质增强工具集。
 ///

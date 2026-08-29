@@ -113,7 +113,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   // 临时：全局按键监听，不依赖 Focus 焦点
   bool _globalKeyHandler(KeyEvent event) {
     if (event is KeyDownEvent) {
-      print('GLOBAL_KEY: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
+      // debugPrint('GLOBAL_KEY: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
     }
     return false; // 不消费事件
   }
@@ -1068,7 +1068,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _seekCatchupTo(Duration offset) {
     // 先统一判空，再用 ! 断言非空
     if (_catchupOriginalStart == null || _catchupOriginalEnd == null ||
-        _originalChannel == null || _currentCatchupProgram == null) return;
+        _originalChannel == null || _currentCatchupProgram == null) {
+      return;
+    }
     
     // offset 是相对节目原始开始时间的偏移
     final originalStart = _catchupOriginalStart!;
@@ -1076,8 +1078,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final seekChannel = _originalChannel!;
     
     final program = _currentCatchupProgram!;
-    final channel = _originalChannel;
-    if (originalStart == null || originalEnd == null || program == null || channel == null) return;
+    final channel = _originalChannel!;
   
     //final newStart = program.start.add(offset);
     //if (!newStart.isBefore(program.end)) return;
@@ -1314,8 +1315,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     // 临时调试：打印所有按键（确认后删除）
     {
-      final type = event is KeyDownEvent ? (event is KeyRepeatEvent ? 'repeat' : 'down') : 'up';
-      print('KEY[$type]: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
+      // debugPrint('KEY[${event is KeyDownEvent ? (event is KeyRepeatEvent ? 'repeat' : 'down') : 'up'}]: label="${event.logicalKey.keyLabel}" id=${event.logicalKey.keyId}');
     }
 
     final playerProvider = context.read<PlayerProvider>();
@@ -1594,7 +1594,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     //}
     if (key == LogicalKeyboardKey.settings ||
         key == LogicalKeyboardKey.contextMenu) {
-      if (event is! KeyDownEvent || event is KeyRepeatEvent) {
+      if (event is! KeyDownEvent) {
         return KeyEventResult.handled;
       }
       ScaffoldMessenger.of(context).showSnackBar(

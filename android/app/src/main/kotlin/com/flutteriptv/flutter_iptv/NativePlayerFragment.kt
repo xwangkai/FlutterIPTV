@@ -1218,12 +1218,16 @@ class NativePlayerFragment : Fragment() {
                         showControls()
                         rightKeyShowedProgressBar = true
                         catchupPendingSeekMs = 0L // 重置累积偏移
+                        rightKeyDownTime = System.currentTimeMillis() // 记录按下时间
                     }
                     return true
                 }
                 
                 // 回放模式下：进度条已显示，累积偏移量，松键时一次性 seek
                 if (isCatchupMode && progressContainer.visibility == View.VISIBLE) {
+                    if (event.repeatCount == 0) {
+                        rightKeyDownTime = System.currentTimeMillis() // 记录按下时间
+                    }
                     catchupPendingSeekMs += seekStepSeconds * 1000L
                     Log.d(TAG, "回放模式：累积 seek 偏移 +${seekStepSeconds}s = ${catchupPendingSeekMs}ms")
                     // 更新进度条位置（视觉反馈，不实际 seek）

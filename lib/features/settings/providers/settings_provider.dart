@@ -100,7 +100,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _hardwareDecoding = true;
   String _decodingMode = 'auto'; // New: auto, hardware, software
   String _windowsHwdecMode = 'auto-safe';
-  String _d3d11vppMode = 'bob';
+  String _d3d11vppMode = 'adaptive';
   bool _allowSoftwareFallback = true;
   String _videoOutput = 'auto';
   String _channelMergeRule = 'name_group'; // New: name, name_group
@@ -1032,7 +1032,7 @@ class SettingsProvider extends ChangeNotifier {
     _channelMergeRule = 'name_group';
     _decodingMode = 'auto';
     _windowsHwdecMode = 'auto-safe';
-    _d3d11vppMode = 'bob';
+    _d3d11vppMode = 'adaptive';
     _allowSoftwareFallback = true;
     _videoOutput = 'auto';
     _bufferSize = 30;

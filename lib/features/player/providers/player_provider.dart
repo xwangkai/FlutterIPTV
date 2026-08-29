@@ -717,12 +717,14 @@ class PlayerProvider extends ChangeNotifier {
           final h = params.h ?? 0;
           final w = params.w ?? 0;
           final isInterlaced = interlaced == '1';
-          // interlaced != '0' 改为 isInterlaced，避免属性读取失败(null)时误判为隔行
-          final is1080i = (h == 1080 && isInterlaced) ||
-                          (h == 1080 && vfFps < 31 && isInterlaced) ||
-                          (codec == 'h264' && h == 1080 && w == 1920);
+          // 扩展隔行检测：覆盖 1080i / 576i / 480i 等所有隔行格式
+          // 中国广电 1080i50 的 H.264 源首帧 interlaced 字段可能不稳定，加入预设规则
+          final needsDeint = isInterlaced ||
+              (h == 1080 && vfFps < 31 && isInterlaced) ||
+              (codec == 'h264' && h == 1080 && w == 1920) ||
+              (h == 576 || h == 480); // SD 隔行源（PAL 576i / NTSC 480i）
 
-          if (is1080i) {
+          if (needsDeint) {
             const filters = [
               'bwdif=mode=1:parity=auto',
               'lavfi:bwdif=mode=1:parity=auto',
@@ -734,14 +736,14 @@ class PlayerProvider extends ChangeNotifier {
               final ok = await _verifyFilterChainActive('vf=$vf');
               if (ok) {
                 applied = true;
-                ServiceLocator.log.i('1080i 反交错 → $vf', tag: 'PlayerProvider');
+                ServiceLocator.log.i('${h}i 反交错 → $vf', tag: 'PlayerProvider');
                 break;
               }
               // 当前滤镜不可用，清除残留状态再尝试下一个
               await _safeSetProperty('vf', '', 'clear_vf');
             }
             if (!applied) {
-              ServiceLocator.log.w('1080i 反交错滤镜均不可用', tag: 'PlayerProvider');
+              ServiceLocator.log.w('${h}i 反交错滤镜均不可用', tag: 'PlayerProvider');
             }
           } else {
             await _safeSetProperty('vf', '', 'clear_vf');
@@ -807,17 +809,9 @@ class PlayerProvider extends ChangeNotifier {
         final vfFps = double.tryParse(vfFpsStr ?? '') ?? 0;
 
         // 读取源端实际色彩空间，用于动态 HDR/SDR 判定
-        // 注意：色彩空间信息（gamma/primaries）可能延迟就绪，需先检查再设置 guard
+        // 注意：色彩空间信息（gamma/primaries）可能延迟就绪
         final srcGamma = await _safeGetProperty('video-params/gamma', 'gamma');
         final srcPrimaries = await _safeGetProperty('video-params/primaries', 'primaries');
-
-        // 如果 HDR 元数据尚未就绪，不设置 guard 标志，等待下次 videoParams 事件重试
-        if (srcGamma == null || srcGamma.isEmpty || srcPrimaries == null || srcPrimaries.isEmpty) {
-          ServiceLocator.log.d(
-              '色彩空间信息尚未就绪 (gamma=$srcGamma, primaries=$srcPrimaries)，延迟到下次 videoParams 事件配置',
-              tag: 'PlayerProvider');
-          return;
-        }
 
         // 检查代际：如果在此期间 _resetDeinterlaceDetection() 被调用（快速切换频道），
         // 当前回调属于旧流，不应再设置 guard 或配置参数，让新流的回调来处理
@@ -826,28 +820,29 @@ class PlayerProvider extends ChangeNotifier {
           return;
         }
 
-        _deinterlaceConfiguredForCurrentStream = true;
-
+        // ─── 先配置去交错（不依赖 gamma/primaries）──────────────────
         final sigPeak = await _safeGetProperty('video-params/sig-peak', 'sig-peak');
-
-        // 读取 codec 用于预设规则
         final codec = await _safeGetProperty('video-params/codec', 'codec');
-
         final h = params.h ?? 0;
         final w = params.w ?? 0;
         final isInterlaced = interlaced == '1';
 
-        // 1080i 判定：标准检测 + 帧率兜底 + 预设规则
-        // 预设规则：H.264 + 1920×1080 的直播源，中国广电通常为 1080i50
-        // 即使首帧 interlaced 字段不稳定，也能正确启用去隔行
-        final is1080i = (h == 1080 && isInterlaced) ||
-                        (h == 1080 && vfFps < 31 && isInterlaced) ||
-                        (codec == 'h264' && h == 1080 && w == 1920);
+        // 扩展隔行检测：覆盖 1080i / 576i / 480i 等所有隔行格式
+        final needsDeint = isInterlaced ||
+            (h == 1080 && vfFps < 31 && isInterlaced) ||
+            (codec == 'h264' && h == 1080 && w == 1920) ||
+            (h == 576 || h == 480);
         // HDR 判定：BT.2020 色域 + (PQ 或 HLG 伽马曲线)
-        final isHDR = srcPrimaries == 'bt.2020' &&
-                      (srcGamma == 'pq' || srcGamma == 'hlg');
+        final hasColorInfo = srcGamma != null && srcGamma.isNotEmpty &&
+            srcPrimaries != null && srcPrimaries.isNotEmpty;
+        final isHDR = hasColorInfo &&
+            srcPrimaries == 'bt.2020' &&
+            (srcGamma == 'pq' || srcGamma == 'hlg');
 
-        // ════════════════════════════════════════════
+        if (!_deinterlaceConfiguredForCurrentStream) {
+          _deinterlaceConfiguredForCurrentStream = true;
+
+          // ════════════════════════════════════════════
         // 第一步：动态色彩映射 — 先判断 HDR/SDR，再决定色彩参数
         // ════════════════════════════════════════════
         if (isHDR) {
@@ -883,7 +878,7 @@ class PlayerProvider extends ChangeNotifier {
         // ════════════════════════════════════════════
         // 第二步：去交错增量配置 — 根据源类型选择性调整 hwdec
         // ════════════════════════════════════════════
-        if (is1080i && !_isSoftwareDecoding) {
+        if (needsDeint && !_isSoftwareDecoding) {
           // 分支 A: 1080i 隔行源 — 按所选硬解方案分流
           //
           // auto-safe（safe 系）：mpv 自动选 direct 解码（d3d11va）。direct 帧是
@@ -947,8 +942,8 @@ class PlayerProvider extends ChangeNotifier {
             }
 
             const filters = [
-              'bwdif=mode=1:parity=tff',
-              'lavfi:yadif=mode=1:parity=tff',
+              'bwdif=mode=1:parity=auto',
+              'lavfi:yadif=mode=1:parity=auto',
             ];
 
             String? workingFilter;

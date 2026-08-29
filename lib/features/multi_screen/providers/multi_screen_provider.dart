@@ -578,10 +578,12 @@ class MultiScreenProvider extends ChangeNotifier {
           final w = params.w ?? 0;
           final isInterlaced = interlaced == '1';
           // 使用 isInterlaced 避免 null 读取失败时误判
-          final is1080i = (h == 1080 && isInterlaced) ||
+          // 扩展覆盖 SD 隔行源（576i/480i）
+          final needsDeint = isInterlaced ||
               (h == 1080 && vfFps < 31 && isInterlaced) ||
-              (codec == 'h264' && h == 1080 && w == 1920);
-          if (!is1080i) {
+              (codec == 'h264' && h == 1080 && w == 1920) ||
+              (h == 576 || h == 480);
+          if (!needsDeint) {
             ServiceLocator.log.i('MultiScreenProvider(Android): ${w}x$h 逐行源，无需去交错');
             return;
           }
@@ -596,7 +598,7 @@ class MultiScreenProvider extends ChangeNotifier {
             await _safeSetProperty(player, 'vf', vf, 'vf_android_deint');
             final ok = await _verifyFilterChainActive(player, 'vf=$vf');
             if (ok) {
-              ServiceLocator.log.i('MultiScreenProvider(Android): 1080i 使用软件去交错 $vf');
+              ServiceLocator.log.i('MultiScreenProvider(Android): ${h}i 使用软件去交错 $vf');
               applied = true;
               break;
             }
@@ -665,16 +667,9 @@ class MultiScreenProvider extends ChangeNotifier {
         final vfFps = double.tryParse(vfFpsStr ?? '') ?? 0;
 
         // 读取源端实际色彩空间，用于动态 HDR/SDR 判定
-        // 注意：色彩空间信息（gamma/primaries）可能延迟就绪，需先检查再设置 guard
+        // 注意：色彩空间信息（gamma/primaries）可能延迟就绪
         final srcGamma = await _safeGetProperty(player, 'video-params/gamma', 'gamma');
         final srcPrimaries = await _safeGetProperty(player, 'video-params/primaries', 'primaries');
-
-        // 如果 HDR 元数据尚未就绪，不设置 guard 标志，等待下次 videoParams 事件重试
-        if (srcGamma == null || srcGamma.isEmpty || srcPrimaries == null || srcPrimaries.isEmpty) {
-          ServiceLocator.log.d(
-              'MultiScreenProvider: 色彩空间信息尚未就绪 (gamma=$srcGamma, primaries=$srcPrimaries)，延迟到下次 videoParams 事件配置');
-          return;
-        }
 
         // 检查代际：如果在此期间 playChannelOnScreen() 被调用（快速切换频道），
         // 当前回调属于旧流，不应再设置 guard 或配置参数，让新流的回调来处理
@@ -683,29 +678,29 @@ class MultiScreenProvider extends ChangeNotifier {
           return;
         }
 
-        screen.deinterlaceConfigured = true;
-
-        final sigPeak = await _safeGetProperty(player, 'video-params/sig-peak', 'sig-peak');
-
-        // 读取 codec 用于预设规则
+        // ─── 先配置去交错（不依赖 gamma/primaries）──────────────────
+        final sigPeakStr = await _safeGetProperty(player, 'video-params/sig-peak', 'sig-peak');
         final codec = await _safeGetProperty(player, 'video-params/codec', 'codec');
-
         final h = params.h ?? 0;
         final w = params.w ?? 0;
         final isInterlaced = interlaced == '1';
 
-        // 1080i 判定：标准检测 + 帧率兜底 + 预设规则
-        // 预设规则：H.264 + 1920×1080 的直播源，中国广电通常为 1080i50
-        // 即使首帧 interlaced 字段不稳定，也能正确启用去隔行
-        // 使用 isInterlaced 避免 null 读取失败时误判
-        final is1080i = (h == 1080 && isInterlaced) ||
-                        (h == 1080 && vfFps < 31 && isInterlaced) ||
-                        (codec == 'h264' && h == 1080 && w == 1920);
+        // 扩展隔行检测：覆盖 1080i / 576i / 480i 等所有隔行格式
+        final needsDeint = isInterlaced ||
+            (h == 1080 && vfFps < 31 && isInterlaced) ||
+            (codec == 'h264' && h == 1080 && w == 1920) ||
+            (h == 576 || h == 480);
         // HDR 判定：BT.2020 色域 + (PQ 或 HLG 伽马曲线)
-        final isHDR = srcPrimaries == 'bt.2020' &&
-                      (srcGamma == 'pq' || srcGamma == 'hlg');
+        final hasColorInfo = srcGamma != null && srcGamma.isNotEmpty &&
+            srcPrimaries != null && srcPrimaries.isNotEmpty;
+        final isHDR = hasColorInfo &&
+            srcPrimaries == 'bt.2020' &&
+            (srcGamma == 'pq' || srcGamma == 'hlg');
 
-        // ════════════════════════════════════════════
+        if (!screen.deinterlaceConfigured) {
+          screen.deinterlaceConfigured = true;
+
+          // ════════════════════════════════════════════
         // 第一步：动态色彩映射 — 先判断 HDR/SDR，再决定色彩参数
         // ════════════════════════════════════════════
         if (isHDR) {
@@ -724,7 +719,7 @@ class MultiScreenProvider extends ChangeNotifier {
             await _safeSetProperty(player, 'hdr-compute-peak', 'yes', 'hdr-compute-peak');
             await _safeSetProperty(player, 'target-peak', '100', 'target-peak');
             ServiceLocator.log.i(
-                'MultiScreenProvider: HDR 源(PQ/HDR10): 色调映射到 SDR (gamma=$srcGamma, primaries=$srcPrimaries, sig-peak=$sigPeak)');
+                'MultiScreenProvider: HDR 源(PQ/HDR10): 色调映射到 SDR (gamma=$srcGamma, primaries=$srcPrimaries, sig-peak=$sigPeakStr)');
           }
         } else {
           // SDR 源（包括 4K SDR、1080p 等）：清零所有 HDR 残留参数
@@ -738,7 +733,7 @@ class MultiScreenProvider extends ChangeNotifier {
         // ════════════════════════════════════════════
         // 第二步：去交错增量配置 — 根据源类型选择性调整 hwdec
         // ════════════════════════════════════════════
-        if (is1080i && _decodingMode != 'software') {
+        if (needsDeint && _decodingMode != 'software') {
           // 分支 A: 1080i 隔行源 — 按所选硬解方案分流
           //
           // auto-safe（safe 系）：mpv 自动选 direct 解码（d3d11va）。direct 帧是
@@ -798,8 +793,8 @@ class MultiScreenProvider extends ChangeNotifier {
             }
 
             const filters = [
-              'bwdif=mode=1:parity=tff',
-              'lavfi:yadif=mode=1:parity=tff',
+              'bwdif=mode=1:parity=auto',
+              'lavfi:yadif=mode=1:parity=auto',
             ];
 
             String? workingFilter;
@@ -852,6 +847,7 @@ class MultiScreenProvider extends ChangeNotifier {
           final label = h > 0 ? '${h}p 逐行源' : '源（默认按逐行处理）';
           ServiceLocator.log.i('MultiScreenProvider: $label: $targetHwdec 硬解(当前$currentHwdec), 无去交错');
         }
+        } // end if (!screen.deinterlaceConfigured)
       });
     }
   }

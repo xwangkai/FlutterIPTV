@@ -99,7 +99,7 @@ class SettingsProvider extends ChangeNotifier {
   String _defaultQuality = 'auto';
   bool _hardwareDecoding = true;
   String _decodingMode = 'auto'; // New: auto, hardware, software
-  String _windowsHwdecMode = 'auto-copy';
+  String _windowsHwdecMode = 'auto';
   String _d3d11vppMode = 'adaptive';
   bool _allowSoftwareFallback = true;
   String _videoOutput = 'auto';
@@ -236,7 +236,7 @@ class SettingsProvider extends ChangeNotifier {
     _defaultQuality = prefs.getString(_keyDefaultQuality) ?? 'auto';
     _hardwareDecoding = prefs.getBool(_keyHardwareDecoding) ?? true;
     _decodingMode = prefs.getString(_keyDecodingMode) ?? 'auto';
-    _windowsHwdecMode = prefs.getString(_keyWindowsHwdecMode) ?? 'auto-copy';
+    _windowsHwdecMode = prefs.getString(_keyWindowsHwdecMode) ?? 'auto';
     // d3d11vpp 模式：校验是否为合法值，避免残留非法值导致 vf 参数错误
     final savedD3d11vpp = prefs.getString(_keyD3d11vppMode);
     _d3d11vppMode =
@@ -1031,7 +1031,7 @@ class SettingsProvider extends ChangeNotifier {
     _hardwareDecoding = true;
     _channelMergeRule = 'name_group';
     _decodingMode = 'auto';
-    _windowsHwdecMode = 'auto-copy';
+    _windowsHwdecMode = 'auto';
     _d3d11vppMode = 'adaptive';
     _allowSoftwareFallback = true;
     _videoOutput = 'auto';

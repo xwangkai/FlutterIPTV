@@ -692,7 +692,7 @@ class PlayerProvider extends ChangeNotifier {
         await _safeSetProperty('hwdec', 'no', 'hwdec');
         _initialHwdecSet = true;
       }
-      await _safeSetProperty('deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty('deinterlace', 'auto', 'deinterlace');
       await _safeSetProperty('vf', '', 'clear_vf');
 
       if (!enabled) {
@@ -726,10 +726,10 @@ class PlayerProvider extends ChangeNotifier {
 
           if (needsDeint) {
             const filters = [
-              'yadif=mode=0:parity=auto',
-              'lavfi:yadif=mode=0:parity=auto',
-              'bwdif=mode=0:parity=auto',
-              'lavfi:bwdif=mode=0:parity=auto',
+              'yadif=mode=1:parity=auto',
+              'lavfi:yadif=mode=1:parity=auto',
+              'bwdif=mode=1:parity=auto',
+              'lavfi:bwdif=mode=1:parity=auto',
             ];
             bool applied = false;
             for (final vf in filters) {
@@ -774,11 +774,11 @@ class PlayerProvider extends ChangeNotifier {
         await _safeSetProperty('hwdec', _getConfiguredHwdecMode(), 'hwdec');
         _initialHwdecSet = true;
       }
-      await _safeSetProperty('deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty('deinterlace', 'auto', 'deinterlace');
       await _safeSetProperty('vf', '', 'clear_vf');
     } else {
       // 禁用去交错：使用用户配置的 hwdec
-      await _safeSetProperty('deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty('deinterlace', 'auto', 'deinterlace');
       await _safeSetProperty('vf', '', 'clear_vf');
       if (!_initialHwdecSet) {
         await _safeSetProperty('hwdec', _getConfiguredHwdecMode(), 'hwdec');
@@ -895,7 +895,7 @@ class PlayerProvider extends ChangeNotifier {
 
           if (isSafeFlow) {
             // —— auto-safe 流：vf=d3d11vpp 硬件去交错（参数可配置，非 safe 不生效） ——
-            await _safeSetProperty('deinterlace', 'no', 'deinterlace');
+            await _safeSetProperty('deinterlace', 'auto', 'deinterlace');
             await _safeSetProperty('vf', '', 'clear_vf');
             if (_d3d11vppMode == 'off') {
               // 用户关闭 d3d11vpp → 回退硬件 VPP
@@ -928,7 +928,7 @@ class PlayerProvider extends ChangeNotifier {
                 tag: 'PlayerProvider');
           } else if (isCopyFlow) {
             // —— copy 流：软件 bwdif 优先，硬件兜底 ——
-            await _safeSetProperty('deinterlace', 'no', 'deinterlace');
+            await _safeSetProperty('deinterlace', 'auto', 'deinterlace');
             await _safeSetProperty('vf', '', 'clear_vf');
 
             // 读取当前实际 hwdec 配置，判断是否需强制切到 copy-back 模式。
@@ -943,10 +943,10 @@ class PlayerProvider extends ChangeNotifier {
             }
 
             const filters = [
-              'yadif=mode=0:parity=auto',
-              'lavfi:yadif=mode=0:parity=auto',
-              'bwdif=mode=0:parity=auto',
-              'lavfi:bwdif=mode=0:parity=auto',
+              'yadif=mode=1:parity=auto',
+              'lavfi:yadif=mode=1:parity=auto',
+              'bwdif=mode=1:parity=auto',
+              'lavfi:bwdif=mode=1:parity=auto',
             ];
 
             String? workingFilter;
@@ -996,7 +996,7 @@ class PlayerProvider extends ChangeNotifier {
             // 类别不一致或未知：显式重置为用户配置的 hwdec
             await _safeSetProperty('hwdec', targetHwdec, 'hwdec_progressive');
           }
-          await _safeSetProperty('deinterlace', 'no', 'deinterlace');
+          await _safeSetProperty('deinterlace', 'auto', 'deinterlace');
           await _safeSetProperty('vf', '', 'clear_vf');
           final label = h > 0 ? '${h}p 逐行源' : '源（默认按逐行处理）';
           ServiceLocator.log.i('$label: $targetHwdec 硬解(当前$currentHwdec), 无去交错', tag: 'PlayerProvider');

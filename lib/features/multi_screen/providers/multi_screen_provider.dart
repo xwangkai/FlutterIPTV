@@ -556,7 +556,7 @@ class MultiScreenProvider extends ChangeNotifier {
         await _safeSetProperty(player, 'ao', 'audiotrack,opensles', 'ao');
         screen.initialHwdecSet = true;
       }
-      await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty(player, 'deinterlace', 'auto', 'deinterlace');
       await _safeSetProperty(player, 'vf', '', 'clear_vf');
       if (!enabled) {
         screen.videoParamsSubscription?.cancel();
@@ -589,10 +589,10 @@ class MultiScreenProvider extends ChangeNotifier {
           }
           // 依次尝试 bwdif → lavfi:bwdif → lavfi:yadif 软件滤镜
           const filters = [
-            'yadif=mode=0:parity=auto',
-            'lavfi:yadif=mode=0:parity=auto',
-            'bwdif=mode=0:parity=auto',
-            'lavfi:bwdif=mode=0:parity=auto',
+            'yadif=mode=1:parity=auto',
+            'lavfi:yadif=mode=1:parity=auto',
+            'bwdif=mode=1:parity=auto',
+            'lavfi:bwdif=mode=1:parity=auto',
           ];
           bool applied = false;
           for (final vf in filters) {
@@ -632,11 +632,11 @@ class MultiScreenProvider extends ChangeNotifier {
         await _safeSetProperty(player, 'hwdec', _getConfiguredHwdecMode(), 'hwdec');
         screen.initialHwdecSet = true;
       }
-      await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty(player, 'deinterlace', 'auto', 'deinterlace');
       await _safeSetProperty(player, 'vf', '', 'clear_vf');
     } else {
       // 禁用去交错：使用用户配置的 hwdec
-      await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');
+      await _safeSetProperty(player, 'deinterlace', 'auto', 'deinterlace');
       await _safeSetProperty(player, 'vf', '', 'clear_vf');
       if (!screen.initialHwdecSet) {
         await _safeSetProperty(player, 'hwdec', _getConfiguredHwdecMode(), 'hwdec');
@@ -750,7 +750,7 @@ class MultiScreenProvider extends ChangeNotifier {
 
           if (isSafeFlow) {
             // —— auto-safe 流：vf=d3d11vpp 硬件去交错（参数可配置，非 safe 不生效） ——
-            await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');
+            await _safeSetProperty(player, 'deinterlace', 'auto', 'deinterlace');
             await _safeSetProperty(player, 'vf', '', 'clear_vf');
             if (_d3d11vppMode == 'off') {
               // 用户关闭 d3d11vpp → 回退硬件 VPP
@@ -779,7 +779,7 @@ class MultiScreenProvider extends ChangeNotifier {
                 'MultiScreenProvider: 1080i: direct 流($_windowsHwdecMode) 使用硬件去交错 (deinterlace=yes)');
           } else if (isCopyFlow) {
             // —— copy 流：软件 bwdif 优先，硬件兜底 ——
-            await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');
+            await _safeSetProperty(player, 'deinterlace', 'auto', 'deinterlace');
             await _safeSetProperty(player, 'vf', '', 'clear_vf');
 
             // 读取当前实际 hwdec 配置，判断是否需强制切到 copy-back 模式。
@@ -794,10 +794,10 @@ class MultiScreenProvider extends ChangeNotifier {
             }
 
             const filters = [
-              'yadif=mode=0:parity=auto',
-              'lavfi:yadif=mode=0:parity=auto',
-              'bwdif=mode=0:parity=auto',
-              'lavfi:bwdif=mode=0:parity=auto',
+              'yadif=mode=1:parity=auto',
+              'lavfi:yadif=mode=1:parity=auto',
+              'bwdif=mode=1:parity=auto',
+              'lavfi:bwdif=mode=1:parity=auto',
             ];
 
             String? workingFilter;
@@ -845,7 +845,7 @@ class MultiScreenProvider extends ChangeNotifier {
             // 类别不一致或未知：显式重置为用户配置的 hwdec
             await _safeSetProperty(player, 'hwdec', targetHwdec, 'hwdec_progressive');
           }
-          await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');
+          await _safeSetProperty(player, 'deinterlace', 'auto', 'deinterlace');
           await _safeSetProperty(player, 'vf', '', 'clear_vf');
           final label = h > 0 ? '${h}p 逐行源' : '源（默认按逐行处理）';
           ServiceLocator.log.i('MultiScreenProvider: $label: $targetHwdec 硬解(当前$currentHwdec), 无去交错');

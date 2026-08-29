@@ -255,6 +255,16 @@
             android:visibility="gone">
 
             <TextView
+                android:id="@+id/progress_start"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#99FFFFFF"
+                android:textSize="9sp"
+                android:text=""
+                android:layout_marginEnd="8dp"
+                android:visibility="gone" />
+
+            <TextView
                 android:id="@+id/progress_current"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

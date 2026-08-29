@@ -71,6 +71,7 @@ class NativePlayerFragment : Fragment() {
     private lateinit var progressBar: android.widget.SeekBar
     private lateinit var progressCurrent: TextView
     private lateinit var progressDuration: TextView
+    private lateinit var progressStart: TextView
     private lateinit var helpText: TextView
     
     // Category panel views
@@ -103,6 +104,7 @@ class NativePlayerFragment : Fragment() {
     private var longPressHandled = false // 防止长按后继续触发
     private var isSeekingWithLeftRight = false // 标记是否正在用左右键拖动进度
     private var seekSpeedMultiplier = 1.0f // 快进快退速度倍数（递增，浮点数）
+    private var rightKeyShowedProgressBar = false // 回放模式下右键刚显示了进度条，跳过首次 seek
     
     // Double click detection for left key (show category panel)
     private var lastLeftKeyUpTime = 0L
@@ -427,6 +429,7 @@ class NativePlayerFragment : Fragment() {
         progressBar = view.findViewById(R.id.progress_bar)
         progressCurrent = view.findViewById(R.id.progress_current)
         progressDuration = view.findViewById(R.id.progress_duration)
+        progressStart = view.findViewById(R.id.progress_start)
         helpText = view.findViewById(R.id.help_text)
         
         // 设置进度条拖动监听器
@@ -1185,6 +1188,24 @@ class NativePlayerFragment : Fragment() {
                     return true
                 }
                 
+                // 分类面板已打开时不处理
+                if (categoryPanelVisible) {
+                    return false
+                }
+                
+                // 回放模式下：如果进度条未显示，第一次按右键先显示进度条，不移动进度
+                if (isCatchupMode && progressContainer.visibility != View.VISIBLE) {
+                    if (event.repeatCount == 0) {
+                        Log.d(TAG, "回放模式：右键显示进度条，不移动进度")
+                        progressContainer.visibility = View.VISIBLE
+                        helpText.visibility = View.GONE
+                        startProgressUpdate()
+                        showControls()
+                        rightKeyShowedProgressBar = true
+                    }
+                    return true
+                }
+                
                 // 如果长按已处理，继续处理重复事件（持续快进，速度递增）
                 if (rightLongPressHandled) {
                     // 只要进度条可见就允许快进
@@ -1343,25 +1364,10 @@ class NativePlayerFragment : Fragment() {
                     return true
                 }
                 
-                // 短按处理 - 播放/暂停或双击收藏
-                val pressDuration = System.currentTimeMillis() - centerKeyDownTime
-                if (centerKeyDownTime > 0 && pressDuration < LONG_PRESS_THRESHOLD) {
-                    val currentTime = System.currentTimeMillis()
-                    val timeSinceLastOk = currentTime - lastOkPressTime
-                    Log.d(TAG, "OK key up: pressDuration=$pressDuration, timeSinceLastOk=$timeSinceLastOk, lastOkPressTime=$lastOkPressTime")
-                    // 检测双击 - 收藏
-                    if (lastOkPressTime > 0 && timeSinceLastOk < OK_DOUBLE_CLICK_INTERVAL) {
-                        Log.d(TAG, "Double click detected, toggling favorite")
-                        toggleFavorite()
-                        lastOkPressTime = 0L
-                    } else {
-                        // 单击 - 播放/暂停
-                        lastOkPressTime = currentTime
-                        showControls()
-                        player?.let {
-                            if (it.isPlaying) it.pause() else it.play()
-                        }
-                    }
+                // 短按：打开频道列表（分类面板）
+                if (centerKeyDownTime > 0 && 
+                    System.currentTimeMillis() - centerKeyDownTime < LONG_PRESS_THRESHOLD) {
+                    showCategoryPanel()
                 }
                 centerKeyDownTime = 0L
                 return true
@@ -1454,13 +1460,16 @@ class NativePlayerFragment : Fragment() {
                     return true
                 }
                 
-                // 短按右键 - 快进
+                // 短按右键 - 快进（回放模式下首次按右键只显示进度条，不seek）
                 val pressDuration = System.currentTimeMillis() - rightKeyDownTime
                 if (rightKeyDownTime > 0 && pressDuration < LONG_PRESS_THRESHOLD) {
                     Log.d(TAG, "Right key short press, seek forward")
                     
-                    // 只在进度条可见时执行快进
-                    if (progressContainer.visibility == View.VISIBLE) {
+                    // 回放模式下，如果进度条是刚被右键显示的，跳过本次 seek
+                    if (rightKeyShowedProgressBar) {
+                        rightKeyShowedProgressBar = false
+                        Log.d(TAG, "回放模式：首次右键只显示进度条，跳过 seek")
+                    } else if (progressContainer.visibility == View.VISIBLE) {
                         safeSeekBy(seekStepSeconds * 1000L)
                         showControls()
                     }
@@ -2902,12 +2911,10 @@ class NativePlayerFragment : Fragment() {
         Log.d(TAG, "currentIndex: $currentIndex")
         Log.d(TAG, "channelIsSeekable.size: ${channelIsSeekable.size}")
         
-        // 回放（catchup）模式下强制显示进度条
+        // 回放（catchup）模式下不强制显示进度条，用户按右键才显示，再按才移动进度
         if (isCatchupMode) {
-            Log.d(TAG, "回放模式 - 强制显示进度条")
-            progressContainer.visibility = View.VISIBLE
-            helpText.visibility = View.GONE
-            startProgressUpdate()
+            Log.d(TAG, "回放模式 - 进度条初始隐藏，按右键显示")
+            // 不强制显示，让用户通过按键控制
             return
         }
 
@@ -2974,6 +2981,7 @@ class NativePlayerFragment : Fragment() {
             Log.d(TAG, "隐藏进度条，显示帮助文字")
             progressContainer.visibility = View.GONE
             helpText.visibility = View.VISIBLE
+            rightKeyShowedProgressBar = false // 重置右键显示标志
             if (!isDlnaMode) {
                 Log.d(TAG, "停止进度更新")
                 stopProgressUpdate()
@@ -2993,8 +3001,11 @@ class NativePlayerFragment : Fragment() {
                 val pos = (catchupStreamStartMs + p.currentPosition.coerceAtLeast(0) - originalStart)
                     .coerceIn(0, duration)
                 progressBar.progress = (pos * 100 / duration).toInt()
-                progressCurrent.text = formatTime(pos)
-                progressDuration.text = formatTime(duration)
+                // 显示墙钟时间：开始时刻 / 当前时刻 / 结束时刻
+                progressStart.visibility = View.VISIBLE
+                progressStart.text = formatProgramTime(originalStart)
+                progressCurrent.text = formatProgramTime(catchupStreamStartMs + p.currentPosition.coerceAtLeast(0))
+                progressDuration.text = formatProgramTime(catchupProgramEndMs)
             }
             return
         }
@@ -3005,6 +3016,7 @@ class NativePlayerFragment : Fragment() {
         if (duration > 0) {
             val progress = (position * 100 / duration).toInt()
             progressBar.progress = progress
+            progressStart.visibility = View.GONE // 非回放模式隐藏开始时间
             progressCurrent.text = formatTime(position)
             progressDuration.text = formatTime(duration)
         }

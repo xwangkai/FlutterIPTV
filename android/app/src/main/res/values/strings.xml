@@ -18,7 +18,7 @@
     <string name="operation_failed">Operation failed</string>
     <string name="now_playing">Now Playing</string>
     <string name="up_next">Up Next</string>
-    <string name="controls_hint">CH keys Switch/Long:Source · ←→ Short:Seek/Long:Continuous · Left Double:Category · OK Play/Double:Fav/Long:Multi</string>
+    <string name="controls_hint">CH keys Switch/Long:Source · ←→ Short:Seek/Long:Continuous · OK Channels/Long:Multi · ▶\uFE0E Play/Pause</string>
     <string name="category">Category</string>
     <string name="channels">Channels</string>
     

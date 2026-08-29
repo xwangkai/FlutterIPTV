@@ -144,6 +144,13 @@ jobs:
           key: pub-linux-${{ hashFiles('pubspec.lock') }}
           restore-keys: pub-linux-
 
+      - name: Cache CMake build objects
+        uses: actions/cache@v4
+        with:
+          path: android/app/.cxx
+          key: cmake-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('android/app/**') }}
+          restore-keys: cmake-
+
       - name: Configure Gradle
         run: |
           mkdir -p ~/.gradle
@@ -202,7 +209,7 @@ jobs:
 
       - name: Build Mobile APKs
         run: |
-          flutter build apk --release --split-per-abi
+          flutter build apk --release --no-tree-shake-icons --split-per-abi
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/flutteriptv-Android-Mobile-arm64-v8a.apk
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/flutteriptv-Android-Mobile-armeabi-v7a.apk
@@ -248,6 +255,13 @@ jobs:
           path: ~/.pub-cache
           key: pub-linux-${{ hashFiles('pubspec.lock') }}
           restore-keys: pub-linux-
+
+      - name: Cache CMake build objects
+        uses: actions/cache@v4
+        with:
+          path: android/app/.cxx
+          key: cmake-${{ hashFiles('pubspec.lock') }}-${{ hashFiles('android/app/**') }}
+          restore-keys: cmake-
 
       - name: Configure Gradle
         run: |
@@ -307,11 +321,9 @@ jobs:
 
       - name: Build TV APKs
         run: |
-          flutter build apk --release --dart-define=IS_TV=true --split-per-abi
+          flutter build apk --release --no-tree-shake-icons --dart-define=IS_TV=true --target-platform android-arm64
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/flutteriptv-AndroidTV-arm64-v8a.apk
-          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/flutteriptv-AndroidTV-armeabi-v7a.apk
-          cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/flutteriptv-AndroidTV-x86_64.apk
+          cp build/app/outputs/flutter-apk/app-release.apk dist/flutteriptv-AndroidTV-arm64-v8a.apk
 
       - name: Upload TV Artifacts
         uses: actions/upload-artifact@v7
@@ -400,8 +412,6 @@ jobs:
           | 文件 | 说明 |
           |------|------|
           | [flutteriptv-AndroidTV-arm64-v8a.apk](${BASE_URL}/flutteriptv-AndroidTV-arm64-v8a.apk) | 64位 ARM 电视（推荐） |
-          | [flutteriptv-AndroidTV-armeabi-v7a.apk](${BASE_URL}/flutteriptv-AndroidTV-armeabi-v7a.apk) | 32位 ARM 电视 |
-          | [flutteriptv-AndroidTV-x86_64.apk](${BASE_URL}/flutteriptv-AndroidTV-x86_64.apk) | x86_64 电视模拟器 |
           EOF
 
       - name: Delete Existing Release (if any)
@@ -438,7 +448,5 @@ jobs:
             release-assets/staged/flutteriptv-Android-Mobile-armeabi-v7a.apk
             release-assets/staged/flutteriptv-Android-Mobile-x86_64.apk
             release-assets/staged/flutteriptv-AndroidTV-arm64-v8a.apk
-            release-assets/staged/flutteriptv-AndroidTV-armeabi-v7a.apk
-            release-assets/staged/flutteriptv-AndroidTV-x86_64.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

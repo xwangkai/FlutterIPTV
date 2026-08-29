@@ -1593,9 +1593,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     //}
     if (key == LogicalKeyboardKey.settings ||
         key == LogicalKeyboardKey.contextMenu) {
-      if (event is! KeyDownEvent) {
-        return KeyEventResult.handled;
-      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('EPG panel: $_showEpgPanel → ${!_showEpgPanel}')),
       );

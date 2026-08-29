@@ -151,6 +151,7 @@ class NativePlayerFragment : Fragment() {
     private var currentCatchupProgram: EpgProgramItem? = null
     private var catchupStreamStartMs: Long = 0L // 当前回放流的起点（epoch毫秒），服务端快进/快退后更新
     private var catchupProgramEndMs: Long = 0L // 回放节目的结束时间（epoch毫秒）
+    private var catchupPendingSeekMs: Long = 0L // 回放模式累积的 seek 偏移量（松键时一次性应用）
     private var epgPanelVisible = false
     private var selectedEpgDateIndex = 0
 
@@ -1152,6 +1153,15 @@ class NativePlayerFragment : Fragment() {
                     return false
                 }
                 
+                // 回放模式下：进度条已显示，累积偏移量（左键=后退）
+                if (isCatchupMode && progressContainer.visibility == View.VISIBLE) {
+                    catchupPendingSeekMs -= seekStepSeconds * 1000L
+                    Log.d(TAG, "回放模式：累积 seek 偏移 -${seekStepSeconds}s = ${catchupPendingSeekMs}ms")
+                    updateProgressBarPosition(catchupPendingSeekMs)
+                    showControls()
+                    return true
+                }
+                
                 // 记录按下时间，用于长按检测
                 if (event.repeatCount == 0) {
                     leftKeyDownTime = System.currentTimeMillis()
@@ -1202,7 +1212,18 @@ class NativePlayerFragment : Fragment() {
                         startProgressUpdate()
                         showControls()
                         rightKeyShowedProgressBar = true
+                        catchupPendingSeekMs = 0L // 重置累积偏移
                     }
+                    return true
+                }
+                
+                // 回放模式下：进度条已显示，累积偏移量，松键时一次性 seek
+                if (isCatchupMode && progressContainer.visibility == View.VISIBLE) {
+                    catchupPendingSeekMs += seekStepSeconds * 1000L
+                    Log.d(TAG, "回放模式：累积 seek 偏移 +${seekStepSeconds}s = ${catchupPendingSeekMs}ms")
+                    // 更新进度条位置（视觉反馈，不实际 seek）
+                    updateProgressBarPosition(catchupPendingSeekMs)
+                    showControls()
                     return true
                 }
                 
@@ -1400,6 +1421,15 @@ class NativePlayerFragment : Fragment() {
                 // 短按左键处理
                 val pressDuration = System.currentTimeMillis() - leftKeyDownTime
                 if (leftKeyDownTime > 0 && pressDuration < LONG_PRESS_THRESHOLD) {
+                    // 回放模式：松键时应用累积的 seek 偏移
+                    if (isCatchupMode && catchupPendingSeekMs != 0L) {
+                        Log.d(TAG, "回放模式：应用累积 seek 偏移 ${catchupPendingSeekMs}ms")
+                        safeSeekBy(catchupPendingSeekMs)
+                        catchupPendingSeekMs = 0L
+                        showControls()
+                        leftKeyDownTime = 0L
+                        return true
+                    }
                     val currentTime = System.currentTimeMillis()
                     val timeSinceLastLeft = currentTime - lastLeftKeyUpTime
                     Log.d(TAG, "Left key up: pressDuration=$pressDuration, timeSinceLastLeft=$timeSinceLastLeft")
@@ -1460,7 +1490,7 @@ class NativePlayerFragment : Fragment() {
                     return true
                 }
                 
-                // 短按右键 - 快进（回放模式下首次按右键只显示进度条，不seek）
+                // 短按右键 - 快进（回放模式：松键时一次性应用累积偏移）
                 val pressDuration = System.currentTimeMillis() - rightKeyDownTime
                 if (rightKeyDownTime > 0 && pressDuration < LONG_PRESS_THRESHOLD) {
                     Log.d(TAG, "Right key short press, seek forward")
@@ -1469,6 +1499,12 @@ class NativePlayerFragment : Fragment() {
                     if (rightKeyShowedProgressBar) {
                         rightKeyShowedProgressBar = false
                         Log.d(TAG, "回放模式：首次右键只显示进度条，跳过 seek")
+                    } else if (isCatchupMode && catchupPendingSeekMs != 0L) {
+                        // 回放模式：松键时应用累积的 seek 偏移
+                        Log.d(TAG, "回放模式：应用累积 seek 偏移 ${catchupPendingSeekMs}ms")
+                        safeSeekBy(catchupPendingSeekMs)
+                        catchupPendingSeekMs = 0L
+                        showControls()
                     } else if (progressContainer.visibility == View.VISIBLE) {
                         safeSeekBy(seekStepSeconds * 1000L)
                         showControls()
@@ -2982,6 +3018,7 @@ class NativePlayerFragment : Fragment() {
             progressContainer.visibility = View.GONE
             helpText.visibility = View.VISIBLE
             rightKeyShowedProgressBar = false // 重置右键显示标志
+            catchupPendingSeekMs = 0L // 重置累积 seek 偏移
             if (!isDlnaMode) {
                 Log.d(TAG, "停止进度更新")
                 stopProgressUpdate()
@@ -3020,6 +3057,21 @@ class NativePlayerFragment : Fragment() {
             progressCurrent.text = formatTime(position)
             progressDuration.text = formatTime(duration)
         }
+    }
+    
+    // 回放模式：根据累积偏移量更新进度条位置（不实际 seek，仅视觉反馈）
+    private fun updateProgressBarPosition(pendingMs: Long) {
+        val p = player ?: return
+        if (!isCatchupMode || currentCatchupProgram == null) return
+        
+        val originalStart = currentCatchupProgram!!.start
+        val duration = catchupProgramEndMs - originalStart
+        if (duration <= 0) return
+        
+        val currentPos = catchupStreamStartMs + p.currentPosition.coerceAtLeast(0) - originalStart
+        val targetPos = (currentPos + pendingMs).coerceIn(0, duration)
+        progressBar.progress = (targetPos * 100 / duration).toInt()
+        progressCurrent.text = formatProgramTime(catchupStreamStartMs + p.currentPosition.coerceAtLeast(0) + pendingMs)
     }
     
     // 格式化时间 (毫秒 -> HH:MM:SS 或 MM:SS)

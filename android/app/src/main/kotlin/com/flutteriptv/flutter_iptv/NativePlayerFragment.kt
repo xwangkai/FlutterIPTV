@@ -1408,6 +1408,16 @@ class NativePlayerFragment : Fragment() {
                 longPressHandled = false
                 seekSpeedMultiplier = 1.0f // 重置速度倍数
                 
+                // 回放模式：松键时一次性应用累积的 seek 偏移（长按/短按都适用）
+                if (isCatchupMode && catchupPendingSeekMs != 0L) {
+                    Log.d(TAG, "回放模式：应用累积 seek 偏移 ${catchupPendingSeekMs}ms")
+                    safeSeekBy(catchupPendingSeekMs)
+                    catchupPendingSeekMs = 0L
+                    leftKeyDownTime = 0L
+                    showControls()
+                    return true
+                }
+                
                 // 如果是长按触发的（拖动进度），不再处理
                 if (wasLongPressHandled) {
                     leftKeyDownTime = 0L
@@ -1430,15 +1440,6 @@ class NativePlayerFragment : Fragment() {
                 // 短按左键处理
                 val pressDuration = System.currentTimeMillis() - leftKeyDownTime
                 if (leftKeyDownTime > 0 && pressDuration < LONG_PRESS_THRESHOLD) {
-                    // 回放模式：松键时应用累积的 seek 偏移
-                    if (isCatchupMode && catchupPendingSeekMs != 0L) {
-                        Log.d(TAG, "回放模式：应用累积 seek 偏移 ${catchupPendingSeekMs}ms")
-                        safeSeekBy(catchupPendingSeekMs)
-                        catchupPendingSeekMs = 0L
-                        showControls()
-                        leftKeyDownTime = 0L
-                        return true
-                    }
                     val currentTime = System.currentTimeMillis()
                     val timeSinceLastLeft = currentTime - lastLeftKeyUpTime
                     Log.d(TAG, "Left key up: pressDuration=$pressDuration, timeSinceLastLeft=$timeSinceLastLeft")
@@ -1479,6 +1480,16 @@ class NativePlayerFragment : Fragment() {
                 val wasLongPressHandled = rightLongPressHandled
                 rightLongPressHandled = false
                 seekSpeedMultiplier = 1.0f // 重置速度倍数
+                
+                // 回放模式：松键时一次性应用累积的 seek 偏移（长按/短按都适用）
+                if (isCatchupMode && catchupPendingSeekMs != 0L) {
+                    Log.d(TAG, "回放模式：应用累积 seek 偏移 ${catchupPendingSeekMs}ms")
+                    safeSeekBy(catchupPendingSeekMs)
+                    catchupPendingSeekMs = 0L
+                    rightKeyDownTime = 0L
+                    showControls()
+                    return true
+                }
                 
                 // 如果是长按触发的（拖动进度），不再处理
                 if (wasLongPressHandled) {

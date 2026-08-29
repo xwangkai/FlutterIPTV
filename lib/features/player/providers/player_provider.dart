@@ -32,6 +32,7 @@ class PlayerProvider extends ChangeNotifier {
 
   // Common state
   Channel? _currentChannel;
+  List<Channel> _channels = []; // 频道列表（用于 FCC 预取和切换频道）
   PlayerState _state = PlayerState.idle;
   String? _error;
   Duration _position = Duration.zero;
@@ -1535,6 +1536,9 @@ class PlayerProvider extends ChangeNotifier {
         await _applyDeinterlaceFilter();
         await _mediaKitPlayer?.open(_createMedia(realUrl));
 
+        // FCC 极速切台：预取下一频道（参考 SrcBox LoadWithPrefetch）
+        _prefetchNextChannelsForFcc();
+
         final playTime =
             DateTime.now().difference(playStartTime).inMilliseconds;
         ServiceLocator.log
@@ -1988,6 +1992,11 @@ class PlayerProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置频道列表（用于 FCC 预取和频道切换）
+  void setChannels(List<Channel> channels) {
+    _channels = channels;
+  }
+
   @override
   void dispose() {
     _isDisposed = true;
@@ -2021,5 +2030,55 @@ class PlayerProvider extends ChangeNotifier {
         unawaited(_attemptSoftwareFallback());
       }
     });
+  }
+
+  /// FCC 极速切台：预取下一频道（参考 SrcBox LoadWithPrefetch）
+  /// 使用 mpv 的 prefetch-playlist 功能，在后台预连接下一频道，
+  /// 切换时无需重新建立 TCP/HTTP 连接。
+  Future<void> _prefetchNextChannelsForFcc() async {
+    final settings = ServiceLocator.settings;
+    if (settings == null) return;
+    final fccCount = settings.fccPrefetchCount;
+    if (fccCount <= 0) return;
+
+    try {
+      final player = _mediaKitPlayer;
+      if (player == null) return;
+
+      final channel = _currentChannel;
+      if (channel == null) return;
+
+      // 使用本地频道列表
+      final channels = _channels;
+      if (channels.isEmpty) return;
+
+      final currentIdx = channels.indexWhere((c) => c.id == channel.id);
+      if (currentIdx < 0) return;
+
+      // 启用 prefetch-playlist
+      await _safeSetProperty('prefetch-playlist', 'yes', 'fcc_prefetch');
+
+      // 预取接下来的 N 个频道
+      final nativePlayer = player.platform as dynamic;
+      for (int i = 1; i <= fccCount; i++) {
+        final nextIdx = currentIdx + i;
+        if (nextIdx >= channels.length) break;
+        final nextChannel = channels[nextIdx];
+        if (nextChannel.url.isEmpty) continue;
+        try {
+          await nativePlayer.command([
+            'loadfile',
+            nextChannel.url,
+            'append-play',
+          ]);
+        } catch (_) {
+          // 单个预取失败不影响其他
+        }
+      }
+      ServiceLocator.log.d(
+          'FCC: 预取 $fccCount 个频道完成', tag: 'PlayerProvider');
+    } catch (e) {
+      ServiceLocator.log.d('FCC: 预取失败 - $e', tag: 'PlayerProvider');
+    }
   }
 }

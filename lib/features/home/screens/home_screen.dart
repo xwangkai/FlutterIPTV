@@ -1454,7 +1454,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ro
         });
       } else {
         // 其他平台普通播放
-        context.read<PlayerProvider>().playChannel(channel);
+        final playerProvider = context.read<PlayerProvider>();
+        playerProvider.setChannels(channelProvider.allChannels);
+        playerProvider.playChannel(channel);
         Navigator.pushNamed(context, AppRouter.player, arguments: {
           'channelUrl': channel.url,
           'channelName': channel.name,

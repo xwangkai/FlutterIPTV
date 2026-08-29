@@ -1078,7 +1078,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     final seekChannel = _originalChannel!;
     
     final program = _currentCatchupProgram!;
-    final channel = _originalChannel!;
   
     //final newStart = program.start.add(offset);
     //if (!newStart.isBefore(program.end)) return;

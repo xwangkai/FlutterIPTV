@@ -903,7 +903,7 @@ class PlayerProvider extends ChangeNotifier {
                   '1080i: auto-safe 流 d3d11vpp 关闭，使用 deinterlace=yes',
                   tag: 'PlayerProvider');
             } else {
-              final vfStr = 'd3d11vpp=mode=$_d3d11vppMode:deint=yes:interlaced-only=yes';
+              final vfStr = 'd3d11vpp=mode=$_d3d11vppMode:deint=yes';
               await _safeSetProperty('vf', vfStr, 'vf_d3d11vpp');
               final ok = await _verifyFilterChainActive('vf=$vfStr');
               if (ok) {

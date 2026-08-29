@@ -757,7 +757,7 @@ class MultiScreenProvider extends ChangeNotifier {
               ServiceLocator.log.i(
                   'MultiScreenProvider: 1080i: auto-safe 流 d3d11vpp 关闭，使用 deinterlace=yes');
             } else {
-              final vfStr = 'd3d11vpp=mode=$_d3d11vppMode:deint=yes:interlaced-only=yes';
+              final vfStr = 'd3d11vpp=mode=$_d3d11vppMode:deint=yes';
               await _safeSetProperty(player, 'vf', vfStr, 'vf_d3d11vpp');
               final ok = await _verifyFilterChainActive(player, 'vf=$vfStr');
               if (ok) {

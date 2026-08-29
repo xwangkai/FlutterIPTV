@@ -676,6 +676,9 @@ class PlayerProvider extends ChangeNotifier {
     await _safeSetProperty('video-sync', 'audio', 'video-sync');
     await _safeSetProperty('framedrop', 'vo', 'framedrop');
 
+    // HTTP Keep-Alive：复用 TCP 连接，配合 rtp2httpd 实现 FCC 毫秒级切台
+    await _safeSetProperty('http-header-fields', 'Connection: keep-alive', 'http-keepalive');
+
     // 允许 RTSP 协议：media_kit 默认 protocol-whitelist 不含 rtsp，
     // 会导致 avformat_open_input() 失败并报 "Protocol 'rtsp' not on whitelist"
     // 覆盖为包含 rtsp（及底层 udp/rtp/tcp）的安全白名单

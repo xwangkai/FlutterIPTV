@@ -551,6 +551,9 @@ class MultiScreenProvider extends ChangeNotifier {
       if (screen == null) return;
       if (!screen.initialHwdecSet) {
         await _safeSetProperty(player, 'hwdec', 'no', 'hwdec');
+        // Android TV 多屏：切换到 AAudio 避免 OpenSL ES 对象数量限制
+        // （默认 opensles 有 ~32 对象上限，多个 Player 容易超限导致音频崩溃）
+        await _safeSetProperty(player, 'ao', 'audiotrack,opensles', 'ao');
         screen.initialHwdecSet = true;
       }
       await _safeSetProperty(player, 'deinterlace', 'no', 'deinterlace');

@@ -672,8 +672,8 @@ class PlayerProvider extends ChangeNotifier {
     final prefs = ServiceLocator.prefs;
     final enabled = prefs.getBool('deinterlace_enabled') ?? true;
 
-    // 公共参数：所有源均使用 display-resample 同步
-    await _safeSetProperty('video-sync', 'display-resample', 'video-sync');
+    // 公共参数：使用 audio 同步（跟音频时钟，不插值），避免 display-resample 帧插值产生重影
+    await _safeSetProperty('video-sync', 'audio', 'video-sync');
     await _safeSetProperty('framedrop', 'vo', 'framedrop');
 
     // 允许 RTSP 协议：media_kit 默认 protocol-whitelist 不含 rtsp，

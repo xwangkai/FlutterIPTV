@@ -536,8 +536,8 @@ class MultiScreenProvider extends ChangeNotifier {
     final prefs = ServiceLocator.prefs;
     final enabled = prefs.getBool('deinterlace_enabled') ?? true;
 
-    // 公共参数（所有平台）：display-resample 同步 + framedrop + RTSP 协议白名单
-    await _safeSetProperty(player, 'video-sync', 'display-resample', 'video-sync');
+    // 公共参数（所有平台）：audio 同步 + framedrop + RTSP 协议白名单
+    await _safeSetProperty(player, 'video-sync', 'audio', 'video-sync');
     await _safeSetProperty(player, 'framedrop', 'vo', 'framedrop');
     await _safeSetProperty(
         player,

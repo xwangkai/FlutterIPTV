@@ -991,7 +991,12 @@ class NativePlayerFragment : Fragment() {
     }
 
     fun handleBackKey(): Boolean {
-        Log.d(TAG, "handleBackKey: categoryPanelVisible=$categoryPanelVisible, showingChannelList=$showingChannelList, longPressHandled=$longPressHandled")
+        Log.d(TAG, "handleBackKey: categoryPanelVisible=$categoryPanelVisible, showingChannelList=$showingChannelList, epgPanelVisible=$epgPanelVisible, longPressHandled=$longPressHandled")
+        
+        if (epgPanelVisible) {
+            closeEpgPanel()
+            return true
+        }
         
         if (categoryPanelVisible) {
             if (showingChannelList) {

@@ -93,6 +93,7 @@ vec4 hook() {
   ///
   /// mpv 设置 vf 或 deinterlace 后是异步重建滤镜链，失败时可能通过 log 或
   /// error 流报告。同时监听两个流，350ms 内无失败信号则视为生效。
+  /// 额外读回 vf 属性确认滤镜确实在链中，防止静默失败。
   static Future<bool> verifyFilterChainActive(Player player, String label) async {
     final failureSignaled = Completer<bool>();
 
@@ -119,6 +120,15 @@ vec4 hook() {
     );
     await logSub.cancel();
     await errSub.cancel();
+
+    // 读回 vf 属性确认滤镜确实在链中（防止静默失败）
+    if (!failed) {
+      final vfActual = await safeGetProperty(player, 'vf', 'vf_verify');
+      if (vfActual == null || vfActual.isEmpty || vfActual == '(unset)') {
+        ServiceLocator.log.d('MpvUtils: 滤镜链验证失败($label): vf 读回为空');
+        return false;
+      }
+    }
     if (failed) {
       ServiceLocator.log.d('MpvUtils: 滤镜链验证失败($label): 检测到 mpv 滤镜配置错误');
     }

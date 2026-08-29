@@ -726,9 +726,9 @@ class PlayerProvider extends ChangeNotifier {
 
           if (needsDeint) {
             const filters = [
-              'bwdif=mode=1:parity=auto',
-              'lavfi:bwdif=mode=1:parity=auto',
-              'lavfi:yadif=mode=1:parity=auto',
+              'bwdif=mode=0:parity=auto',
+              'lavfi:bwdif=mode=0:parity=auto',
+              'lavfi:yadif=mode=0:parity=auto',
             ];
             bool applied = false;
             for (final vf in filters) {
@@ -942,8 +942,8 @@ class PlayerProvider extends ChangeNotifier {
             }
 
             const filters = [
-              'bwdif=mode=1:parity=auto',
-              'lavfi:yadif=mode=1:parity=auto',
+              'bwdif=mode=0:parity=auto',
+              'lavfi:yadif=mode=0:parity=auto',
             ];
 
             String? workingFilter;

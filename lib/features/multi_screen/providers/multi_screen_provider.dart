@@ -589,9 +589,9 @@ class MultiScreenProvider extends ChangeNotifier {
           }
           // 依次尝试 bwdif → lavfi:bwdif → lavfi:yadif 软件滤镜
           const filters = [
-            'bwdif=mode=1:parity=auto',
-            'lavfi:bwdif=mode=1:parity=auto',
-            'lavfi:yadif=mode=1:parity=auto',
+            'bwdif=mode=0:parity=auto',
+            'lavfi:bwdif=mode=0:parity=auto',
+            'lavfi:yadif=mode=0:parity=auto',
           ];
           bool applied = false;
           for (final vf in filters) {
@@ -793,8 +793,8 @@ class MultiScreenProvider extends ChangeNotifier {
             }
 
             const filters = [
-              'bwdif=mode=1:parity=auto',
-              'lavfi:yadif=mode=1:parity=auto',
+              'bwdif=mode=0:parity=auto',
+              'lavfi:yadif=mode=0:parity=auto',
             ];
 
             String? workingFilter;

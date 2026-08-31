@@ -578,6 +578,16 @@ class MultiScreenProvider extends ChangeNotifier {
           screen.deinterlaceConfigured = true;
           final h = params.h ?? 0;
           final w = params.w ?? 0;
+          
+          // 标清频道宽高比修正
+          if (h > 0 && h <= 576 && w > 0) {
+            final sar = await _safeGetProperty(player, 'video-params/sar', 'sar');
+            if (sar == null || sar == '1:1' || sar == '1/1') {
+              await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
+              ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h SAR=$sar → 强制 16:9');
+            }
+          }
+          
           final isInterlaced = interlaced == '1';
           // 使用 isInterlaced 避免 null 读取失败时误判
           // 扩展覆盖 SD 隔行源（576i/480i）
@@ -686,6 +696,16 @@ class MultiScreenProvider extends ChangeNotifier {
         final codec = await _safeGetProperty(player, 'video-params/codec', 'codec');
         final h = params.h ?? 0;
         final w = params.w ?? 0;
+        
+        // 标清频道宽高比修正
+        if (h > 0 && h <= 576 && w > 0) {
+          final sar = await _safeGetProperty(player, 'video-params/sar', 'sar');
+          if (sar == null || sar == '1:1' || sar == '1/1') {
+            await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
+            ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h SAR=$sar → 强制 16:9');
+          }
+        }
+        
         final isInterlaced = interlaced == '1';
 
         // 扩展隔行检测：覆盖 1080i / 576i / 480i 等所有隔行格式

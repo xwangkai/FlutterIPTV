@@ -580,12 +580,9 @@ class MultiScreenProvider extends ChangeNotifier {
           final w = params.w ?? 0;
           
           // 标清频道宽高比修正
-          if (h > 0 && h <= 576 && w > 0) {
-            final sar = await _safeGetProperty(player, 'video-params/sar', 'sar');
-            if (sar == null || sar == '1:1' || sar == '1/1') {
-              await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
-              ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h SAR=$sar → 强制 16:9');
-            }
+          if (h > 0 && h <= 576) {
+            await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
+            ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h → 强制 16:9');
           }
           
           final isInterlaced = interlaced == '1';
@@ -698,12 +695,9 @@ class MultiScreenProvider extends ChangeNotifier {
         final w = params.w ?? 0;
         
         // 标清频道宽高比修正
-        if (h > 0 && h <= 576 && w > 0) {
-          final sar = await _safeGetProperty(player, 'video-params/sar', 'sar');
-          if (sar == null || sar == '1:1' || sar == '1/1') {
-            await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
-            ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h SAR=$sar → 强制 16:9');
-          }
+        if (h > 0 && h <= 576) {
+          await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
+          ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h → 强制 16:9');
         }
         
         final isInterlaced = interlaced == '1';

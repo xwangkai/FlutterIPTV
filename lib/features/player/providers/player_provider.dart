@@ -833,14 +833,11 @@ class PlayerProvider extends ChangeNotifier {
         final h = params.h ?? 0;
         final w = params.w ?? 0;
         
-        // 标清频道宽高比修正：720×576 等 SD 源若缺少 SAR 标记，
-        // mpv 按正方形像素显示导致画面压扁。SD 广播一律按 16:9 处理。
-        if (h > 0 && h <= 576 && w > 0) {
-          final sar = await _safeGetProperty('video-params/sar', 'sar');
-          if (sar == null || sar == '1:1' || sar == '1/1') {
-            await _safeSetProperty('video-aspect-override', '16:9', 'aspect-sd');
-            ServiceLocator.log.d('SD 频道 ${w}x$h SAR=$sar → 强制 16:9', tag: 'PlayerProvider');
-          }
+        // 标清频道宽高比修正：720×576/785×576 等 SD 源缺少 SAR 标记，
+        // mpv 按正方形像素显示导致画面压扁。SD 广播一律强制 16:9。
+        if (h > 0 && h <= 576) {
+          await _safeSetProperty('video-aspect-override', '16:9', 'aspect-sd');
+          ServiceLocator.log.d('SD 频道 ${w}x$h → 强制 16:9', tag: 'PlayerProvider');
         }
         
         final isInterlaced = interlaced == '1';

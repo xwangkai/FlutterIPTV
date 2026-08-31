@@ -539,6 +539,7 @@ class MultiScreenProvider extends ChangeNotifier {
     // 公共参数（所有平台）：audio 同步 + framedrop + RTSP 协议白名单
     await _safeSetProperty(player, 'video-sync', 'audio', 'video-sync');
     await _safeSetProperty(player, 'framedrop', 'vo', 'framedrop');
+    await _safeSetProperty(player, 'video-aspect-method', 'bitstream', 'aspect-method');
     await _safeSetProperty(player, 'http-header-fields', 'Connection: keep-alive', 'http-keepalive');
     await _safeSetProperty(
         player,

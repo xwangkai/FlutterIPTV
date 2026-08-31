@@ -676,6 +676,9 @@ class PlayerProvider extends ChangeNotifier {
     await _safeSetProperty('video-sync', 'audio', 'video-sync');
     await _safeSetProperty('framedrop', 'vo', 'framedrop');
 
+    // 标清频道宽高比修正：优先从码流读取 SAR，避免 720×576 被按正方形像素拉伸
+    await _safeSetProperty('video-aspect-method', 'bitstream', 'aspect-method');
+
     // HTTP Keep-Alive：复用 TCP 连接，配合 rtp2httpd 实现 FCC 毫秒级切台
     await _safeSetProperty('http-header-fields', 'Connection: keep-alive', 'http-keepalive');
 

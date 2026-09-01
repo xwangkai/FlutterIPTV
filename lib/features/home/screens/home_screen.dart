@@ -1,7 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/navigation/app_router.dart';
@@ -12,9 +11,7 @@ import '../../../core/widgets/channel_card.dart';
 import '../../../core/widgets/channel_logo_widget.dart';
 import '../../../core/platform/platform_detector.dart';
 import '../../../core/i18n/app_strings.dart';
-import '../../../core/services/update_service.dart';
 import '../../../core/services/service_locator.dart';
-import '../../../core/models/app_update.dart';
 import '../../../core/utils/card_size_calculator.dart';
 import '../../../core/utils/throttled_state_mixin.dart'; // ✅ 导入节流 mixin
 import '../../channels/providers/channel_provider.dart';

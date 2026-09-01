@@ -541,6 +541,7 @@ class MultiScreenProvider extends ChangeNotifier {
     await _safeSetProperty(player, 'framedrop', 'vo', 'framedrop');
     await _safeSetProperty(player, 'video-aspect-method', 'bitstream', 'aspect-method');
     await _safeSetProperty(player, 'http-header-fields', 'Connection: keep-alive', 'http-keepalive');
+    await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-16-9');
     await _safeSetProperty(
         player,
         'protocol-whitelist',
@@ -578,12 +579,6 @@ class MultiScreenProvider extends ChangeNotifier {
           screen.deinterlaceConfigured = true;
           final h = params.h ?? 0;
           final w = params.w ?? 0;
-          
-          // 标清频道宽高比修正
-          if (h > 0 && h <= 576) {
-            await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
-            ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h → 强制 16:9');
-          }
           
           final isInterlaced = interlaced == '1';
           // 使用 isInterlaced 避免 null 读取失败时误判
@@ -693,12 +688,6 @@ class MultiScreenProvider extends ChangeNotifier {
         final codec = await _safeGetProperty(player, 'video-params/codec', 'codec');
         final h = params.h ?? 0;
         final w = params.w ?? 0;
-        
-        // 标清频道宽高比修正
-        if (h > 0 && h <= 576) {
-          await _safeSetProperty(player, 'video-aspect-override', '16:9', 'aspect-sd');
-          ServiceLocator.log.d('MultiScreen: SD 频道 ${w}x$h → 强制 16:9');
-        }
         
         final isInterlaced = interlaced == '1';
 

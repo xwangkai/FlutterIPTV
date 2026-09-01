@@ -682,6 +682,10 @@ class PlayerProvider extends ChangeNotifier {
     // HTTP Keep-Alive：复用 TCP 连接，配合 rtp2httpd 实现 FCC 毫秒级切台
     await _safeSetProperty('http-header-fields', 'Connection: keep-alive', 'http-keepalive');
 
+    // SD 频道宽高比修正：IPTV 的 SD 源（720×576 等）缺少 SAR 标记，
+    // mpv 默认按正方形像素显示导致画面压扁。全局强制 16:9。
+    await _safeSetProperty('video-aspect-override', '16:9', 'aspect-16-9');
+
     // 允许 RTSP 协议：media_kit 默认 protocol-whitelist 不含 rtsp，
     // 会导致 avformat_open_input() 失败并报 "Protocol 'rtsp' not on whitelist"
     // 覆盖为包含 rtsp（及底层 udp/rtp/tcp）的安全白名单
@@ -832,13 +836,6 @@ class PlayerProvider extends ChangeNotifier {
         final codec = await _safeGetProperty('video-params/codec', 'codec');
         final h = params.h ?? 0;
         final w = params.w ?? 0;
-        
-        // 标清频道宽高比修正：720×576/785×576 等 SD 源缺少 SAR 标记，
-        // mpv 按正方形像素显示导致画面压扁。SD 广播一律强制 16:9。
-        if (h > 0 && h <= 576) {
-          await _safeSetProperty('video-aspect-override', '16:9', 'aspect-sd');
-          ServiceLocator.log.d('SD 频道 ${w}x$h → 强制 16:9', tag: 'PlayerProvider');
-        }
         
         final isInterlaced = interlaced == '1';
 

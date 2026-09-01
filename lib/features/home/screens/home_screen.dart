@@ -45,8 +45,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ro
   List<Channel> _watchHistoryChannels = [];
   int? _lastPlaylistId; // 跟踪上次的播放列表ID
   int _lastChannelCount = 0; // 跟踪上次的频道数量
-  String _appVersion = '';
-  AppUpdate? _availableUpdate; // 可用的更新
   final ScrollController _scrollController = ScrollController(); // 添加滚动控制器
   final FocusNode _continueButtonFocusNode = FocusNode(); // 继续观看按钮的焦点节点
   bool _hasTriggeredEmptyChannelLoad = false; // ✅ 标记是否已触发空频道加载，避免重复触发
@@ -56,8 +54,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ro
     super.initState();
     WidgetsBinding.instance.addObserver(this); // 监听应用生命周期
     _loadData();
-    _loadVersion();
-    _checkForUpdates();
     // 监听频道变化
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ChannelProvider>().addListener(_onChannelProviderChanged);
@@ -99,34 +95,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ro
       _checkAndReloadIfNeeded();
       // 刷新观看记录
       _refreshWatchHistory();
-    }
-  }
-
-  Future<void> _checkForUpdates() async {
-    try {
-      final updateService = UpdateService();
-      // 启动时强制检查一次更新（忽略24小时限制）
-      final update = await updateService.checkForUpdates(forceCheck: true);
-      if (mounted && update != null) {
-        setState(() {
-          _availableUpdate = update;
-        });
-      }
-    } catch (e) {
-      // 静默失败，不影响用户体验
-    }
-  }
-
-  Future<void> _loadVersion() async {
-    try {
-      final packageInfo = await PackageInfo.fromPlatform();
-      if (mounted) {
-        setState(() {
-          _appVersion = packageInfo.version;
-        });
-      }
-    } catch (e) {
-      // ignore
     }
   }
 
@@ -814,61 +782,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver, Ro
                           style: TextStyle(
                               fontSize: isLandscape ? 16 : (isMobile ? 18 : 28),
                               fontWeight: FontWeight.bold,
-                              color: Colors.white)), // 横屏16，竖屏18
-                      const SizedBox(width: 8),
-                      Text('v$_appVersion',
-                          style: TextStyle(
-                              fontSize: isLandscape ? 10 : (isMobile ? 11 : 11),
-                              fontWeight: FontWeight.normal,
-                              color: Colors.white70)), // 横屏12，竖屏13，桌面14
-                      if (_availableUpdate != null) ...[
-                        const SizedBox(width: 8),
-                        TVFocusable(
-                          onSelect: () => Navigator.pushNamed(
-                              context, AppRouter.settings,
-                              arguments: {'autoCheckUpdate': true}),
-                          focusScale: 1.0,
-                          showFocusBorder: false,
-                          builder: (context, isFocused, child) {
-                            return Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                gradient: isFocused
-                                    ? AppTheme.getGradient(context)
-                                    : LinearGradient(
-                                        colors: [
-                                          Colors.orange.shade600,
-                                          Colors.deepOrange.shade600
-                                        ],
-                                      ),
-                                borderRadius:
-                                    BorderRadius.circular(AppTheme.radiusPill),
-                                border: isFocused
-                                    ? Border.all(
-                                        color:
-                                            AppTheme.getPrimaryColor(context),
-                                        width: 2)
-                                    : null,
-                              ),
-                              child: child,
-                            );
-                          },
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.system_update_rounded,
-                                  size: 10, color: Colors.white),
-                              const SizedBox(width: 3),
-                              Text('v${_availableUpdate!.version}',
-                                  style: const TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ),
-                      ],
+                              color: Colors.white)),
                     ],
                   ),
                 ),

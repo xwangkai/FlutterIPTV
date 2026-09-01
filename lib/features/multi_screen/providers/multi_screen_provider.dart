@@ -799,8 +799,8 @@ class MultiScreenProvider extends ChangeNotifier {
             }
 
             const filters = [
-              'yadif=mode=1:parity=auto',
-              'bwdif=mode=1:parity=auto',
+              'lavfi:yadif',
+              'lavfi:bwdif',
             ];
 
             String? workingFilter;
